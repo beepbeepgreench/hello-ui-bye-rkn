@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "sshd(fail) $*" >> "$STUB_LOG"
+echo "/etc/ssh/sshd_config line 99: Bad configuration option: Bogus" >&2; exit 255

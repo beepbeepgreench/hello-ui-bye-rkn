@@ -1,13 +1,31 @@
 #!/usr/bin/env bash
-# Собирает install.sh из install.sh.in + lib/provision.py (один файл для запуска одной командой).
+# Собирает install.sh (один файл) из install.sh.in + lib/*.
+#   VERSION=v1.0.0 REPO=beepbeepgreench/hello-ui-bye-rkn bash build.sh
+# SELF_URL указывает на ТЕГ релиза, поэтому всем раздаётся одна неизменная версия.
 set -euo pipefail
 cd "$(dirname "$0")"
-grep -q '^PYEOF$' lib/provision.py && { echo "provision.py не должен содержать строку PYEOF"; exit 1; }
-python3 - <<'EOF'
-tpl = open("install.sh.in").read()
-py = open("lib/provision.py").read().rstrip("\n")
-assert tpl.count("@@PROVISION@@") == 1
-open("install.sh", "w").write(tpl.replace("@@PROVISION@@", py))
+VERSION=${VERSION:-$(cat VERSION 2>/dev/null || echo v0.0.0-dev)}
+REPO=${REPO:-beepbeepgreench/hello-ui-bye-rkn}
+SELF_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/install.sh"
+for f in lib/provision.py lib/sni.py; do
+  [ -f "$f" ] || { echo "нет $f"; exit 1; }
+  if grep -q '^PYEOF$' "$f"; then echo "$f не должен содержать строку PYEOF"; exit 1; fi
+done
+VERSION="$VERSION" SELF_URL="$SELF_URL" python3 - <<'EOF'
+import os, re
+s = open("install.sh.in").read()
+def lib_sh(m):
+    body = open(f"lib/{m.group(1)}.sh").read()
+    body = re.sub(r"^#!.*\n", "", body)          # shebang модуля не нужен внутри
+    return body.rstrip("\n")
+s = re.sub(r"@@LIB_SH:(\w+)@@", lib_sh, s)
+for key, path in (("@@PROVISION@@", "lib/provision.py"), ("@@SNI@@", "lib/sni.py")):
+    assert s.count(key) == 1, key
+    s = s.replace(key, open(path).read().rstrip("\n"))
+s = s.replace("@@VERSION@@", os.environ["VERSION"]).replace("@@SELF_URL@@", os.environ["SELF_URL"])
+assert "@@" not in s.replace("${SELF_URL#@@}", ""), "остались незаменённые маркеры"
+open("install.sh", "w").write(s)
 EOF
 chmod +x install.sh
-bash -n install.sh && echo "install.sh собран: $(wc -l < install.sh) строк"
+bash -n install.sh
+echo "install.sh собран: ${VERSION}, $(wc -l < install.sh) строк, SELF_URL=${SELF_URL}"

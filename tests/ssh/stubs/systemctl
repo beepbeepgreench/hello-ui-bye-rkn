@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# stub: логирует аргументы; поведение задаётся файлами в $STUB_DIR
+echo "systemctl $*" >> "$STUB_LOG"
+args=("$@"); unit="${args[-1]}"
+case "$1" in
+  is-active)  [ -e "$STUB_DIR/active_$unit" ]; exit;;
+  is-enabled) [ -e "$STUB_DIR/enabled_$unit" ]; exit;;
+  show)       [ -e "$STUB_DIR/listen_$2" ] && cat "$STUB_DIR/listen_$2"; exit 0;;
+  reload|restart|enable|start) [ -e "$STUB_DIR/fail_$1_$2" ] && exit 1; exit 0;;
+esac
+exit 0

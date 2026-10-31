@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+echo "journalctl $*" >> "$STUB_LOG"
+[ -e "$STUB_DIR/journal" ] && cat "$STUB_DIR/journal"
+exit 0

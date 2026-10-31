@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+echo "sleep $*" >> "$STUB_LOG"

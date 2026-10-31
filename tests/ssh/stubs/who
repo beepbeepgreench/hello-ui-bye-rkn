@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+[ -e "$STUB_DIR/who" ] && cat "$STUB_DIR/who"
+exit 0

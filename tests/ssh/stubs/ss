@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+echo "ss $*" >> "$STUB_LOG"
+case "$*" in
+  *established*) [ -e "$STUB_DIR/ss_est" ] && cat "$STUB_DIR/ss_est";;
+  *) [ -e "$STUB_DIR/ss_listen" ] && cat "$STUB_DIR/ss_listen";;
+esac
+exit 0

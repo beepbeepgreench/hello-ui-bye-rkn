@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# обёртка над настоящим sshd: записывает код возврата
+/usr/sbin/sshd "$@"; rc=$?
+echo "sshd $* rc=$rc" >> "$STUB_LOG"; exit $rc

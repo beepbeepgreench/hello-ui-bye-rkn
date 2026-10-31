@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# stub ufw: правила хранятся в $STUB_DIR/ufw_rules
+echo "ufw $*" >> "$STUB_LOG"
+R="$STUB_DIR/ufw_rules"; touch "$R"
+case "$1" in
+  status) [ -e "$STUB_DIR/ufw_enabled" ] && echo "Status: active" || echo "Status: inactive"
+          echo; awk '{printf "%-26s ALLOW       Anywhere                   # %s\n",$1,$2}' "$R";;
+  allow)  if grep -q "^$2 " "$R"; then echo "Skipping adding existing rule"; else echo "$2 ${4:-}" >> "$R"; echo "Rule added"; fi;;
+  delete) grep -v "^$3 " "$R" > "$R.t" || true; mv "$R.t" "$R"; echo "Rule deleted";;
+  --force) [ "$2" = enable ] && touch "$STUB_DIR/ufw_enabled";;
+  enable) touch "$STUB_DIR/ufw_enabled";;
+esac
+exit 0

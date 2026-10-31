@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+echo "fail2ban-client $*" >> "$STUB_LOG"
+case "$1" in
+  -t) [ -e "$STUB_DIR/f2b_test_fail" ] && { echo "ERROR"; exit 255; }; exit 0;;
+  status) # поднимается после N вызовов (файл f2b_up_after содержит N), или никогда при f2b_never
+    [ -e "$STUB_DIR/f2b_never" ] && exit 255
+    n=$(cat "$STUB_DIR/f2b_calls" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$STUB_DIR/f2b_calls"
+    [ "$n" -ge "$(cat "$STUB_DIR/f2b_up_after" 2>/dev/null || echo 1)" ] && { echo "Status for the jail: sshd"; exit 0; }
+    exit 255;;
+esac
+exit 0
