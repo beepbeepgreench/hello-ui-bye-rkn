@@ -45,9 +45,10 @@ PermitRootLogin prohibit-password
 MaxAuthTries 3
 LoginGraceTime 30
 EOF
+  install -d -m 755 /run/sshd
   sshd -t || { rm -f /etc/ssh/sshd_config.d/00-hardening.conf; die "sshd -t не прошёл, изменения отменены"; }
   systemctl restart ssh 2>/dev/null || systemctl restart sshd
-  sshd -T | grep -Ei '^(passwordauthentication|permitrootlogin) '
+  sshd -T | grep -Ei '^(passwordauthentication|permitrootlogin) ' || true
   echo -e "${c_ok}Готово. НЕ закрывай эту сессию, пока не проверишь вход по ключу в новой.${c_no}"
   echo "Откат: rm /etc/ssh/sshd_config.d/00-hardening.conf && systemctl restart ssh"
 }
@@ -64,7 +65,10 @@ if systemctl list-unit-files x-ui.service >/dev/null 2>&1 && [ -f /etc/x-ui/x-ui
   Чистый сервер — лучший вариант. Если панель не нужна: 'x-ui uninstall', затем запусти скрипт снова."
 fi
 install -d -m 700 "$STATE"
-SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'); SSH_PORT=${SSH_PORT:-22}
+install -d -m 755 /run/sshd   # Ubuntu 24.04+: без него 'sshd -T' падает, пока к SSH никто не подключался
+SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || true
+[ -n "$SSH_PORT" ] || SSH_PORT=$(grep -hE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2; exit}') || true
+SSH_PORT=${SSH_PORT:-22}
 for p in "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP"; do
   if ss -Htlnp "sport = :$p" | grep -v -e xray -e '^$' | grep -c . >/dev/null; then die "порт $p занят: $(ss -Htlnp "sport = :$p")"; fi
 done
