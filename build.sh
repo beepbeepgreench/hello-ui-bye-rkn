@@ -11,6 +11,10 @@ for f in lib/provision.py lib/sni.py; do
   [ -f "$f" ] || { echo "нет $f"; exit 1; }
   if grep -q '^PYEOF$' "$f"; then echo "$f не должен содержать строку PYEOF"; exit 1; fi
 done
+# шаблоны сайтов-масок (lib/sites) — детерминированный tar.gz в base64, вшивается вместо @@SITES@@
+SITES_B64=$(tar --sort=name --mtime='2026-01-01 00:00Z' --owner=0 --group=0 --numeric-owner \
+  --exclude='__pycache__' --exclude='*.pyc' -C lib/sites -cf - . | gzip -9n | base64 -w 76)
+export SITES_B64
 VERSION="$VERSION" SELF_URL="$SELF_URL" python3 - <<'EOF'
 import os, re
 s = open("install.sh.in").read()
@@ -22,6 +26,8 @@ s = re.sub(r"@@LIB_SH:(\w+)@@", lib_sh, s)
 for key, path in (("@@PROVISION@@", "lib/provision.py"), ("@@SNI@@", "lib/sni.py")):
     assert s.count(key) == 1, key
     s = s.replace(key, open(path).read().rstrip("\n"))
+assert s.count("@@SITES@@") == 1, "@@SITES@@"
+s = s.replace("@@SITES@@", os.environ["SITES_B64"])
 s = s.replace("@@VERSION@@", os.environ["VERSION"]).replace("@@SELF_URL@@", os.environ["SELF_URL"])
 assert "@@" not in s.replace("${SELF_URL#@@}", ""), "остались незаменённые маркеры"
 open("install.sh", "w").write(s)

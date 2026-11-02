@@ -49,12 +49,39 @@ load_config(){
 }
 save_config(){
   ( umask 077
-    printf 'USERS=%q\nSNI=%q\nPORT_REALITY=%q\nPORT_SUDOKU=%q\nPORT_XHTTP=%q\nPUBLIC_IP=%q\nCOUNTRY=%q\nDOMAIN=%q\nDOMAIN_PORT=%q\nBORROWED_SNI=%q\nINSTALLED_VERSION=%q\n' \
+    printf 'USERS=%q\nSNI=%q\nPORT_REALITY=%q\nPORT_SUDOKU=%q\nPORT_XHTTP=%q\nPUBLIC_IP=%q\nCOUNTRY=%q\nDOMAIN=%q\nDOMAIN_PORT=%q\nBORROWED_SNI=%q\nSITE_TEMPLATE=%q\nINSTALLED_VERSION=%q\n' \
       "${USERS:-}" "${SNI:-}" "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" "${PUBLIC_IP:-}" "${COUNTRY:-}" \
-      "${DOMAIN:-}" "${DOMAIN_PORT:-}" "${BORROWED_SNI:-}" "$SCRIPT_VERSION" > "$STATE/config.env" )
+      "${DOMAIN:-}" "${DOMAIN_PORT:-}" "${BORROWED_SNI:-}" "${SITE_TEMPLATE:-}" "$SCRIPT_VERSION" > "$STATE/config.env" )
 }
 require_installed(){
   [ -f "$STATE/panel.env" ] && [ -x /usr/local/x-ui/x-ui ] || die "установка не найдена. Сначала: bash install.sh"
+}
+is_installed(){ [ -f "$STATE/panel.env" ] && [ -x /usr/local/x-ui/x-ui ]; }
+self_path(){ # путь к файлу этого скрипта (для запуска подкоманд отдельным процессом)
+  if [ -f "$0" ]; then readlink -f "$0"; elif [ -f "$STATE/install.sh" ]; then echo "$STATE/install.sh"; fi
+  return 0
+}
+run_self(){ # run_self КОМАНДА… — подкоманда отдельным процессом: её ошибка (die) не обрывает вызывающего
+  local s; s=$(self_path)
+  [ -n "$s" ] || { warn "нет файла скрипта ($STATE/install.sh) — шаг пропущен"; return 1; }
+  VPN_SETUP_REEXEC=1 bash "$s" "$@"
+}
+ensure_cert_renewal(){ # автопродление сертификата: certbot.timer, иначе cron (продление вызывает deploy-hook → reload nginx)
+  [ "${DOMAIN_CERT_MODE:-letsencrypt}" = selfsigned ] && return 0
+  local m
+  if systemctl is-enabled --quiet certbot.timer 2>/dev/null; then
+    systemctl start certbot.timer >/dev/null 2>&1 || true
+    echo "автопродление сертификата: certbot.timer (проверка дважды в сутки)"
+  elif [ -f /etc/cron.d/certbot ] || [ -f /etc/cron.d/vpn-setup-certbot ]; then
+    echo "автопродление сертификата: cron"
+  else
+    m=$(( $(od -An -N1 -tu1 /dev/urandom) % 60 ))
+    printf 'SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n%s 4,16 * * * root certbot renew -q\n' "$m" \
+      > /etc/cron.d/vpn-setup-certbot
+    chmod 644 /etc/cron.d/vpn-setup-certbot
+    echo "автопродление сертификата: cron /etc/cron.d/vpn-setup-certbot (дважды в сутки)"
+  fi
+  return 0
 }
 write_helpers(){
   install -d -m 700 "$STATE" "$STATE/keys"
@@ -157,7 +184,7 @@ install_cli(){ # короткая команда vpn-setup и подсказка
 #!/bin/sh
 [ -f /root/vpn-setup/config.env ] || exit 0
 echo
-echo " VPN-сервер (vpn-setup). Команды:  vpn-setup status | vpn-setup panel | vpn-setup links | vpn-setup help"
+echo " VPN-сервер (vpn-setup). Меню управления:  vpn-setup      (команды: vpn-setup help)"
 [ -f /etc/ssh/sshd_config.d/00-hardening.conf ] || echo " ! Вход по паролю включён. Когда войдёшь по ключу:  vpn-setup harden-ssh"
 [ -f /var/run/reboot-required ] && echo " ! Ожидают перезагрузки обновления безопасности:  reboot  (VPN пропадёт на 1–2 мин)"
 exit 0
@@ -276,9 +303,39 @@ cmd_sni(){
   warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
 }
 
+choose_site_template(){ # шаблон сайта-заглушки (из модуля сайтов); Enter — первый. Пишет SITE_TEMPLATE
+  declare -F domain_site_list >/dev/null || return 0
+  [ -z "${SITE_TEMPLATE:-}" ] || return 0
+  local list="" ans="" ids n
+  list=$(domain_site_list 2>/dev/null | awk 'NF') || true
+  [ -n "$list" ] || return 0
+  ids=$(printf '%s\n' "$list" | awk -F'|' '{print $1}')
+  if (: </dev/tty) 2>/dev/null; then
+    echo "Какой сайт показывать на домене всем «чужим» (потом можно сменить: vpn-setup site, или заменить своими файлами):"
+    printf '%s\n' "$list" | awk -F'|' '{printf "  %d) %s — %s\n", NR, $2, $3}'
+    ask ans "Номер шаблона" "1"
+  fi
+  ans=${ans:-1}
+  if [[ "$ans" =~ ^[0-9]+$ ]]; then n=$ans; SITE_TEMPLATE=$(printf '%s\n' "$ids" | sed -n "${n}p")
+  elif printf '%s\n' "$ids" | grep -qx -- "$ans"; then SITE_TEMPLATE="$ans"; fi
+  [ -n "${SITE_TEMPLATE:-}" ] || SITE_TEMPLATE=$(printf '%s\n' "$ids" | sed -n 1p)
+  echo "сайт-заглушка: $SITE_TEMPLATE"
+}
+domain_fail_cleanup(){ # EXIT-ловушка cmd_domain: при ошибке вернуть сервер как было
+  local rc=$?
+  [ "$rc" = 0 ] && return 0
+  if [ -n "${DOMAIN_FAIL_HAD:-}" ]; then  # переключались с другого своего домена — вернуть его сайт в nginx
+    ( DOMAIN_SKIP_DNS=1 domain_setup "$DOMAIN_FAIL_HAD" "${PUBLIC_IP:-}" ) >/dev/null 2>&1 \
+      || warn "не удалось вернуть сайт $DOMAIN_FAIL_HAD — выполни: vpn-setup domain $DOMAIN_FAIL_HAD"
+  else domain_disable >/dev/null 2>&1 || true; fi
+  echo -e "${c_warn}! свой домен не подключён (причина выше). VPN работает как раньше, маскировка: ${DOMAIN_FAIL_SNI:-?}${c_no}" >&2
+  exit "$rc"
+}
 cmd_domain(){ # vpn-setup domain ДОМЕН | off | (без аргумента — состояние)
+  local env_tpl="${SITE_TEMPLATE:-}"
   require_installed; load_config
-  local arg="${1:-}" d
+  [ -n "$env_tpl" ] && SITE_TEMPLATE="$env_tpl"
+  local arg="${1:-}" d had=""
   write_helpers
   PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip || true)}
   [ -n "$PUBLIC_IP" ] || die "не удалось определить внешний IPv4. Задай: PUBLIC_IP=x.x.x.x vpn-setup domain …"
@@ -294,6 +351,7 @@ cmd_domain(){ # vpn-setup domain ДОМЕН | off | (без аргумента �
       SNI=$(choose_sni "${BORROWED_SNI:-}") || exit 1
       SET_SNI="$SNI" run_provision
       domain_disable
+      rm -f /etc/cron.d/vpn-setup-certbot
       DOMAIN=""; DOMAIN_PORT=""; echo "$SNI" > "$STATE/sni"
       save_config; publish_links
       warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
@@ -301,13 +359,22 @@ cmd_domain(){ # vpn-setup domain ДОМЕН | off | (без аргумента �
     *)
       d=$(domain_normalize "$arg") || die "некорректное имя домена: $arg"
       step "Свой домен для Reality: $d"
-      [ -n "${DOMAIN:-}" ] || BORROWED_SNI="${SNI:-}"
+      had="${DOMAIN:-}"
+      [ -n "$had" ] || BORROWED_SNI="${SNI:-}"
+      domain_name_check "$d"; domain_dns_check "$d" "$PUBLIC_IP"   # до любых изменений на сервере
       firewall_apply "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" 80
+      # если сайт не поднялся (любая ошибка → exit) — убрать наши следы (nginx-конфиг, порт 80); VPN остаётся как был
+      DOMAIN_FAIL_SNI="${SNI:-?}" DOMAIN_FAIL_HAD="$had"
+      trap 'domain_fail_cleanup' EXIT
       domain_setup "$d" "$PUBLIC_IP"
+      ensure_cert_renewal
       SET_SNI="$d" REALITY_TARGET="127.0.0.1:$DOMAIN_PORT" run_provision
+      trap - EXIT
       DOMAIN="$d"; SNI="$d"; echo "$SNI" > "$STATE/sni"
       save_config; publish_links
-      warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
+      if [ "${VPN_SETUP_QUIET_LINKS:-0}" != 1 ]; then
+        warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
+      fi
       echo "Сайт можно заменить своими файлами: $DOMAIN_WWW_ROOT/$d (vpn-setup его не перезапишет)."
       ;;
   esac
@@ -320,8 +387,10 @@ cmd_install(){
   . /etc/os-release
   [ "${ID:-}" = ubuntu ] || die "поддерживается только Ubuntu 22.04/24.04/26.04 (обнаружено: ${PRETTY_NAME:-?})"
   case "${VERSION_ID:-}" in 22.04|24.04|26.04) ;; *) warn "Ubuntu ${VERSION_ID:-?} не проверялась — продолжаю на свой риск";; esac
-  local ENV_SNI="${SNI:-}" ENV_USERS="${USERS:-}" ENV_COUNTRY_IN="${COUNTRY:-}" ENV_DOMAIN="${DOMAIN:-}"
+  local ENV_SNI="${SNI:-}" ENV_USERS="${USERS:-}" ENV_COUNTRY_IN="${COUNTRY:-}" ENV_DOMAIN="${DOMAIN:-}" ENV_TPL="${SITE_TEMPLATE:-}"
+  local FRESH=0; is_installed || FRESH=1
   load_config
+  [ -n "$ENV_TPL" ] && SITE_TEMPLATE="$ENV_TPL"
   if [ -n "$ENV_USERS" ]; then  # объединяем с уже существующими — старых не теряем
     USERS=$(printf '%s\n' ${USERS:-} $ENV_USERS | awk 'NF && !seen[$0]++' | xargs)
   fi
@@ -444,25 +513,49 @@ EOF
   [ -n "${COUNTRY:-}" ] || COUNTRY=$(detect_country)
   echo "IP сервера: $PUBLIC_IP, страна: ${COUNTRY:-не определена} $(flag_of "${COUNTRY:-}")"
   write_helpers
-  local OLD_SNI="${SNI:-}" SNI_CHANGED=0
+  local OLD_SNI="${SNI:-}" SNI_CHANGED=0 NEW_DOMAIN="" DOMAIN_NOTE="" ans=""
+  # свой домен: новый — проверяем сразу, а подключаем в конце (если не выйдет — установка всё равно завершится)
   if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != off ]; then
-    ENV_DOMAIN=$(domain_normalize "$ENV_DOMAIN") || die "некорректное имя домена в DOMAIN="
-    [ -n "${DOMAIN:-}" ] || BORROWED_SNI="${SNI:-}"
-    DOMAIN="$ENV_DOMAIN"
+    NEW_DOMAIN=$(domain_normalize "$ENV_DOMAIN") || { DOMAIN_NOTE="некорректное имя домена: $ENV_DOMAIN"; NEW_DOMAIN=""; }
+  elif [ "$FRESH" = 1 ] && [ -z "${DOMAIN:-}" ] && [ -z "$ENV_SNI" ] && (: </dev/tty) 2>/dev/null; then
+    echo
+    echo "Свой домен — самая сильная маскировка: Reality выглядит как твой настоящий сайт на этом сервере."
+    echo "Нужна A-запись домена (или поддомена) на $PUBLIC_IP, без Cloudflare-прокси. Нет домена — Enter, включить можно позже."
+    ask ans "Свой домен для маскировки (A-запись на IP сервера уже сделана)? Enter — пропустить" ""
+    if [ -n "$ans" ]; then NEW_DOMAIN=$(domain_normalize "$ans") || { DOMAIN_NOTE="некорректное имя домена: $ans"; NEW_DOMAIN=""; }; fi
+  fi
+  if [ -n "$NEW_DOMAIN" ] && [ "$NEW_DOMAIN" = "${DOMAIN:-}" ]; then NEW_DOMAIN=""; fi   # уже включён
+  if [ -n "$NEW_DOMAIN" ]; then
+    echo "проверяю домен $NEW_DOMAIN (имя, DNS)…"
+    if run_self _domain_check "$NEW_DOMAIN" "$PUBLIC_IP"; then
+      echo "домен $NEW_DOMAIN указывает на этот сервер ✓ — подключу его в конце установки"
+      choose_site_template
+    else
+      DOMAIN_NOTE="домен $NEW_DOMAIN не прошёл проверку (причина выше)"; NEW_DOMAIN=""
+    fi
+  fi
+  if [ -n "$DOMAIN_NOTE" ]; then
+    warn "$DOMAIN_NOTE — продолжаю без своего домена. Включить позже: vpn-setup → пункт 6, или vpn-setup domain ДОМЕН"
   fi
   if [ -n "${DOMAIN:-}" ]; then
-    domain_name_check "$DOMAIN"; domain_dns_check "$DOMAIN" "$PUBLIC_IP"
     SNI="$DOMAIN"; echo "свой домен: Reality маскируется под собственный сайт $DOMAIN (выключить: vpn-setup domain off)"
   elif [ -n "$ENV_SNI" ]; then SNI=$(choose_sni "$ENV_SNI") || exit 1; [ -n "$OLD_SNI" ] && [ "$OLD_SNI" != "$SNI" ] && SNI_CHANGED=1
   elif [ -n "${SNI:-}" ]; then echo "оставляю прежний сайт (сменить: vpn-setup sni)"
-  else SNI=$(choose_sni) || exit 1; fi
+  else
+    [ -n "$NEW_DOMAIN" ] && echo "Сначала запасной (чужой) сайт маскировки — он нужен, если свой домен когда-нибудь отключишь."
+    SNI=$(choose_sni) || exit 1
+  fi
   echo "SNI: $SNI"; echo "$SNI" > "$STATE/sni"
   save_config
 
   step "6/9 Firewall и fail2ban"
   firewall_apply "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" ${DOMAIN:+80}
   fail2ban_apply
-  if [ -n "${DOMAIN:-}" ]; then domain_setup "$DOMAIN" "$PUBLIC_IP"; save_config; fi
+  if [ -n "${DOMAIN:-}" ]; then   # свой домен уже включён: обновить сайт/сертификат; сбой DNS-проверки не ломает работающий сайт
+    if run_self _domain_check "$DOMAIN" "$PUBLIC_IP" >/dev/null 2>&1; then domain_setup "$DOMAIN" "$PUBLIC_IP"
+    else warn "DNS домена $DOMAIN сейчас проверить не удалось — оставляю сайт как есть"; DOMAIN_SKIP_DNS=1 domain_setup "$DOMAIN" "$PUBLIC_IP"; fi
+    ensure_cert_renewal; save_config
+  fi
 
   step "7/9 Inbound'ы и пользователи"
   REALITY_TARGET="${DOMAIN:+127.0.0.1:${DOMAIN_PORT:-}}" run_provision
@@ -477,9 +570,21 @@ EOF
 
   install_cli
 
+  if [ -n "$NEW_DOMAIN" ]; then
+    step "Свой домен $NEW_DOMAIN: сайт, сертификат Let's Encrypt, Reality"
+    if SITE_TEMPLATE="${SITE_TEMPLATE:-}" VPN_SETUP_QUIET_LINKS=1 run_self domain "$NEW_DOMAIN"; then
+      load_config   # DOMAIN, DOMAIN_PORT, SNI — из config.env
+      echo "свой домен $DOMAIN подключён: Reality маскируется под твой сайт https://$DOMAIN"
+    else
+      DOMAIN_NOTE="свой домен $NEW_DOMAIN не подключён (причина выше)"
+      warn "$DOMAIN_NOTE. VPN работает, маскировка: ${SNI}. Повторить: vpn-setup → пункт 6, или vpn-setup domain $NEW_DOMAIN"
+    fi
+  fi
+
   step "9/9 Проверка"
   local rc=0
   ops_status || rc=$?
+  [ -z "$DOMAIN_NOTE" ] || rc=1
 
   cat > "$STATE/README.txt" <<EOF
 vpn-setup ${SCRIPT_VERSION}   Сервер: ${PUBLIC_IP}   SNI Reality: ${SNI}   3X-UI: ${XUI_VERSION}
@@ -488,19 +593,141 @@ vpn-setup ${SCRIPT_VERSION}   Сервер: ${PUBLIC_IP}   SNI Reality: ${SNI}  
 $(panel_text)
 
 Файлы: ссылки ${STATE}/links.txt   QR ${STATE}/qr/   ключи ${STATE}/keys/   бэкапы ${STATE}/backup/ (ежедневно)
-Команды: vpn-setup help    (или bash ${STATE}/install.sh help)
+Команды: vpn-setup (меню)   vpn-setup help    (или bash ${STATE}/install.sh help)
+$(if [ -n "${DOMAIN:-}" ]; then echo "Свой домен: https://${DOMAIN}  (файлы сайта: ${DOMAIN_WWW_ROOT:-/var/www}/${DOMAIN})"; fi)
+
+================ ССЫЛКИ ПОЛЬЗОВАТЕЛЕЙ (секрет! вставить в Happ / v2rayNG / Throne) ================
+$(cat "$STATE/links.txt" 2>/dev/null || echo "нет файла $STATE/links.txt")
 EOF
   chmod 600 "$STATE/README.txt"
 
+  install_summary "$rc" "$DOMAIN_NOTE"
+}
+
+install_summary(){ # install_summary RC [ЗАМЕЧАНИЕ_ПРО_ДОМЕН] — итог установки в консоль
+  local rc="$1" note="${2:-}" yn=""
   echo
+  echo "=================================================================="
   if [ "$rc" = 0 ]; then echo -e "${c_ok}ГОТОВО.${c_no}"; else echo -e "${c_warn}ГОТОВО С ЗАМЕЧАНИЯМИ — см. проверку выше.${c_no}"; fi
-  echo "Как зайти в панель (нужен SSH-туннель):  vpn-setup panel"
-  echo "Всё про сервер (логины, файлы):  cat $STATE/README.txt      Команды:  vpn-setup help"
-  echo "Скачай через SFTP папку $STATE/qr и файл $STATE/links.txt — это секреты."
+  [ -z "$note" ] || echo -e "${c_warn}! ${note}. Включить позже: vpn-setup → пункт 6, или vpn-setup domain ДОМЕН${c_no}"
+  echo
+  # пароль панели — только на экран; если вывод пишется в файл/лог, пароль не печатаем
+  if [ -t 1 ]; then panel_text; else panel_text | sed "s|${P_PASS:-__no_password__}|см. $STATE/README.txt|g"; fi
+  echo
+  echo "ССЫЛКИ ДЛЯ ПРИЛОЖЕНИЙ: $STATE/links.txt   QR-коды: $STATE/qr/   (показать: vpn-setup links)"
+  echo "Скачать всё одним файлом (панель, пароли, ссылки): MobaXterm → слева вкладка SFTP → папка $STATE → файл README.txt (и папка qr)."
+  echo "Это секреты — не пересылай их в общие чаты."
   echo "Проверь с домашнего ПК без VPN, что сервер доступен:  curl -s -o NUL -w \"%{http_code}\" http://${PUBLIC_IP}:${PORT_XHTTP}/   (ожидается 404)"
+  echo "Меню управления сервером:  vpn-setup"
   if [ ! -f /etc/ssh/sshd_config.d/00-hardening.conf ]; then
     warn "Вход по паролю ещё включён. Зайди по ключу в НОВОЙ сессии, затем выполни:  vpn-setup harden-ssh"
   fi
+  if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+    read -r -p "Показать ссылки пользователей сейчас? [y/N]: " yn </dev/tty || yn=""
+    case "$yn" in y|Y|д|Д|yes|да) ops_links ;; esac
+  fi
+  return 0
+}
+
+# ===================== меню =====================
+menu_pause(){ local _x; read -r -p "Enter — назад в меню… " _x </dev/tty || true; }
+menu_run(){ # menu_run КОМАНДА… — подкоманда отдельным процессом; Ctrl+C прерывает её, а не меню
+  local rc=0
+  echo
+  trap ':' INT
+  run_self "$@" || rc=$?
+  trap - INT
+  [ "$rc" = 0 ] || echo -e "${c_warn}(команда завершилась с ошибкой, код $rc)${c_no}"
+  return 0
+}
+menu_header(){
+  local out nf nw st="" x="" tgt
+  echo
+  echo "=================================================================="
+  if ! is_installed; then
+    echo " vpn-setup ${SCRIPT_VERSION} — VPN на этом сервере ещё НЕ настроен"
+    echo "=================================================================="
+    return 0
+  fi
+  load_config
+  x=$(/usr/local/x-ui/x-ui -v 2>/dev/null | tr -dc '0-9.\n' | sed -n 1p) || true
+  if [ -n "${DOMAIN:-}" ]; then tgt="свой домен ${DOMAIN}"; else tgt="сайт ${SNI:-?}"; fi
+  echo " vpn-setup ${SCRIPT_VERSION} · 3X-UI ${x:-?} · $(flag_of "${COUNTRY:-}") ${PUBLIC_IP:-?}"
+  echo " Пользователей: $(wc -w <<<"${USERS:-}") · маскировка Reality: ${tgt}"
+  printf ' Состояние: проверяю…\r'
+  out=$(run_self status 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
+  nf=$(grep -c '^  ✗' <<<"$out") || nf=0
+  nw=$(grep -c '^  !' <<<"$out") || nw=0
+  if [ "$nf" = 0 ] && [ "$nw" = 0 ]; then st="${c_ok}✓ всё в порядке${c_no}"
+  elif [ "$nf" = 0 ]; then st="${c_warn}! замечаний: $nw${c_no} (пункт 2)"
+  else st="${c_err}✗ проблем: $nf${c_no}, замечаний: $nw (пункт 2)"; fi
+  echo -e " Состояние: ${st}            "
+  echo "=================================================================="
+}
+menu_main(){ # интерактивное меню (как у x-ui); выход — 0
+  local c="" v=""
+  while true; do
+    menu_header
+    if ! is_installed; then
+      cat <<'MENU'
+  1) Установить VPN
+  2) Проверить IP до установки (не режет ли провайдер)
+  3) Справка по командам
+  0) Выход
+MENU
+      read -r -p "Выбери пункт: " c </dev/tty || return 0
+      case "$c" in
+        1) menu_run install; menu_pause ;;
+        2) menu_run precheck; menu_pause ;;
+        3) ops_help; menu_pause ;;
+        0|q|exit|"") return 0 ;;
+        *) echo "нет такого пункта" ;;
+      esac
+      continue
+    fi
+    cat <<'MENU'
+  1) Обновить скрипт (с GitHub)          7) Сайт-заглушка своего домена
+  2) Состояние сервера                   8) Чужой сайт маскировки Reality
+  3) Ссылки и QR-коды                    9) Отключить вход по паролю (SSH)
+  4) Вход в панель 3X-UI (SSH-туннель)  10) Бэкап сейчас
+  5) Добавить пользователей             11) Повторить установку / проверку
+  6) Свой домен                         12) Удалить VPN
+  0) Выход
+MENU
+    read -r -p "Выбери пункт: " c </dev/tty || return 0
+    case "$c" in
+      1) menu_run update && { [ -f "$STATE/install.sh" ] && exec bash "$STATE/install.sh"; }; menu_pause ;;
+      2) menu_run status; menu_pause ;;
+      3) v=""; read -r -p "Имя пользователя (Enter — все): " v </dev/tty || v=""
+         menu_run links "$v"; menu_pause ;;
+      4) menu_run panel; menu_pause ;;
+      5) v=""; read -r -p "Новые имена латиницей через пробел (Enter — отмена): " v </dev/tty || v=""
+         if [ -n "${v// /}" ]; then
+           if [[ "$v" =~ ^[A-Za-z0-9_\ -]+$ ]]; then USERS="$v" menu_run install
+           else echo "имена — только латиница, цифры, _ и -"; fi
+         fi
+         menu_pause ;;
+      6) menu_run domain
+         v=""; read -r -p "Домен или поддомен (off — выключить, Enter — назад): " v </dev/tty || v=""
+         if [ "$v" = off ]; then menu_run domain off
+         elif [ -n "$v" ]; then
+           SITE_TEMPLATE=""; choose_site_template
+           SITE_TEMPLATE="${SITE_TEMPLATE:-}" menu_run domain "$v"; SITE_TEMPLATE=""
+         fi
+         menu_pause ;;
+      7) load_config
+         if [ -z "${DOMAIN:-}" ]; then echo "Сначала включи свой домен (пункт 6) — сайт-заглушка бывает только на своём домене."
+         else menu_run site; fi
+         menu_pause ;;
+      8) menu_run sni; menu_pause ;;
+      9) menu_run harden-ssh; menu_pause ;;
+      10) menu_run backup; menu_pause ;;
+      11) menu_run install; menu_pause ;;
+      12) menu_run uninstall; menu_pause ;;
+      0|q|exit|"") return 0 ;;
+      *) echo "нет такого пункта" ;;
+    esac
+  done
 }
 
 # ===================== запуск =====================
@@ -523,8 +750,18 @@ if [ -f "$0" ] && [ "$(id -u)" = 0 ] && [ "$(readlink -f "$0")" != "$(readlink -
   install -d -m 700 "$STATE"; install -m 700 "$0" "$STATE/install.sh"
 fi
 
+# без аргументов в терминале — меню; с переменными USERS/SNI/DOMAIN/… или без терминала — сразу установка
+if [ $# = 0 ] && [ "${VPN_SETUP_MENU:-1}" != 0 ] && [ -t 0 ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null \
+   && [ -z "${USERS:-}${SNI:-}${DOMAIN:-}${COUNTRY:-}${SSH_PUBKEY:-}${SITE_TEMPLATE:-}" ] && [ -n "$(self_path)" ]; then
+  menu_main; exit 0
+fi
+
 case "${1:-install}" in
   install)      cmd_install ;;
+  _domain_check) domain_name_check "${2:?}"; domain_dns_check "${2:?}" "${3:?}" ;;
+  site)         [ "$(id -u)" = 0 ] || die "нужен root"
+                if declare -F cmd_site >/dev/null; then cmd_site "${2:-}"; else die "команда site появится вместе с модулем шаблонов сайтов"; fi ;;
+  menu)         menu_main ;;
   harden-ssh)   [ "$(id -u)" = 0 ] || die "нужен root"; harden_ssh ;;
   sni)          [ "$(id -u)" = 0 ] || die "нужен root"; cmd_sni "${2:-}" ;;
   domain)       [ "$(id -u)" = 0 ] || die "нужен root"; cmd_domain "${2:-}" ;;

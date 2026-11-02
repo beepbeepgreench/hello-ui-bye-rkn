@@ -1,0 +1,28 @@
+{
+ "en": {
+  "currencies": {"USD":"US dollar","EUR":"Euro","GBP":"British pound","CNY":"Chinese yuan","JPY":"Japanese yen","CHF":"Swiss franc","TRY":"Turkish lira","KZT":"Kazakhstani tenge","BYN":"Belarusian ruble","RUB":"Russian ruble","PLN":"Polish zloty","AED":"UAE dirham"},
+  "T_TITLE": "{{BRAND}} — exchange rates", "T_DESC": "Reference exchange rates for major currencies, updated every hour.",
+  "N_RATES": "Rates", "N_ABOUT": "About the data",
+  "C_TITLE": "Currency converter", "C_AMOUNT": "Amount", "C_FROM": "Currency",
+  "R_TITLE": "Rates against the US dollar", "R_CUR": "Currency", "R_RATE": "Rate", "R_CHG": "Change", "R_TREND": "30 days",
+  "R_UPD": "Data updated", "R_NODATA": "Rates are being loaded. Check back in a few minutes.", "R_PER": "per",
+  "A_TITLE": "About the data",
+  "A_P1": "The rates on this site are reference mid-market rates collected from public open-data sources once an hour. They are meant for quick estimates, travel budgets and bookkeeping notes.",
+  "A_P2": "They are not offers to buy or sell. Banks and exchange offices add their own margin, so the rate you get will differ.",
+  "A_P3": "Daily changes are calculated against the previous day's last value. The 30-day charts show one point per day.",
+  "E_TITLE": "Page not found", "E_TEXT": "This page does not exist.", "E_BACK": "Go to rates"
+ },
+ "ru": {
+  "currencies": {"USD":"Доллар США","EUR":"Евро","GBP":"Фунт стерлингов","CNY":"Китайский юань","JPY":"Японская иена","CHF":"Швейцарский франк","TRY":"Турецкая лира","KZT":"Казахстанский тенге","BYN":"Белорусский рубль","RUB":"Российский рубль","PLN":"Польский злотый","AED":"Дирхам ОАЭ"},
+  "T_TITLE": "{{BRAND}} — курсы валют", "T_DESC": "Справочные курсы основных валют, обновление каждый час.",
+  "N_RATES": "Курсы", "N_ABOUT": "О данных",
+  "C_TITLE": "Конвертер валют", "C_AMOUNT": "Сумма", "C_FROM": "Валюта",
+  "R_TITLE": "Курсы к рублю", "R_CUR": "Валюта", "R_RATE": "Курс", "R_CHG": "За сутки", "R_TREND": "30 дней",
+  "R_UPD": "Данные обновлены", "R_NODATA": "Курсы загружаются. Загляните через несколько минут.", "R_PER": "за",
+  "A_TITLE": "О данных",
+  "A_P1": "Курсы на сайте — справочные средние значения из открытых источников, обновляются раз в час. Подходят для быстрых прикидок, бюджета поездки и учёта.",
+  "A_P2": "Это не предложение купить или продать валюту. Банки и обменники добавляют свою наценку, поэтому реальный курс будет отличаться.",
+  "A_P3": "Изменение за сутки считается от последнего значения предыдущего дня. Графики за 30 дней показывают одну точку в день.",
+  "E_TITLE": "Страница не найдена", "E_TEXT": "Такой страницы нет.", "E_BACK": "К курсам"
+ }
+}

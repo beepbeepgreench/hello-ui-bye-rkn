@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{NAME}} — {{T_TITLE}}</title>
+<meta name="description" content="{{T_DESC}}">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="mark" href="/"><span class="mono">{{INITIALS}}</span>{{NAME}}</a>
+  <nav><a href="/#work">{{N_WORK}}</a><a href="/#services">{{N_SERVICES}}</a><a href="/#process">{{N_PROCESS}}</a><a href="/#contact">{{N_CONTACT}}</a></nav>
+</header>
+<main>
+<section class="hero">
+  <div class="hero-text">
+    <h1>{{H_LEAD}}</h1>
+    <p class="sub">{{H_SUB}}</p>
+    <p><a class="btn" href="mailto:{{MAIL}}">{{H_CTA}}</a> <a class="plain" href="mailto:{{MAIL}}">{{MAIL}}</a></p>
+  </div>
+  <div class="stack" aria-hidden="true">
+    <div class="win w1"><b></b><span></span><span></span><span class="short"></span><em></em></div>
+    <div class="win w2"><b></b><span></span><span class="short"></span><em></em><em></em></div>
+    <div class="win w3"><b></b><span class="short"></span><span></span><span></span></div>
+  </div>
+</section>
+
+<section id="work" class="block">
+  <div class="head"><h2>{{S_WORK}}</h2><a class="plain" href="/work">{{N_ALL}}</a></div>
+  <div class="works">
+{{WORKS}}
+  </div>
+</section>
+
+<section id="services" class="block">
+  <div class="head"><h2>{{S_SERVICES}}</h2></div>
+  <ul class="services">
+{{SERVICES}}
+  </ul>
+</section>
+
+<section id="process" class="block">
+  <div class="head"><h2>{{S_PROCESS}}</h2></div>
+  <ol class="steps">
+{{STEPS}}
+  </ol>
+</section>
+
+<section id="contact" class="block contact">
+  <h2>{{S_CONTACT}}</h2>
+  <p>{{C_TEXT}}</p>
+  <p class="big"><a href="mailto:{{MAIL}}">{{MAIL}}</a></p>
+  <p class="note">{{C_NOTE}}</p>
+</section>
+</main>
+<footer><p>© {{SINCE}}–{{YEAR}} {{NAME}}. {{F_NOTE}}</p></footer>
+</body>
+</html>

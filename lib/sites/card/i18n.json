@@ -1,0 +1,40 @@
+{
+ "en": {
+  "names": [["Daniel","Rostova"],["Mark","Ellison"],["Anna","Petrak"],["Leo","Varga"],["Nina","Holt"],["Paul","Kessler"],["Eva","Lindqvist"],["Ivo","Marek"],["Sara","Novak"],["Tom","Brandt"]],
+  "T_TITLE": "web development and small online shops",
+  "T_DESC": "Freelance web developer: fast websites, online shops and admin tools for small businesses.",
+  "N_WORK": "Work", "N_SERVICES": "Services", "N_PROCESS": "How I work", "N_CONTACT": "Contact", "N_ALL": "All projects",
+  "H_LEAD": "I build fast, tidy websites and online shops for small businesses.",
+  "H_SUB": "Freelance since {{SINCE}}. Usually two or three projects at a time, so every client gets a direct line to the person writing the code.",
+  "H_CTA": "Write to me",
+  "S_WORK": "Selected work", "S_SERVICES": "What I can do for you", "S_PROCESS": "How a project goes", "S_CONTACT": "Have a project in mind?",
+  "C_TEXT": "Tell me what you need and when. I reply within a working day, usually with a couple of questions and a rough estimate.",
+  "C_NOTE": "No calls without a short brief first, please — it saves us both time.",
+  "W_TITLE": "Projects", "W_LEAD": "A longer list of recent work. Some clients prefer not to be named, so a few entries are described only by industry.",
+  "W_YEAR": "Year", "W_PROJECT": "Project", "W_TYPE": "Type",
+  "F_NOTE": "Websites, shops and tools for small businesses.",
+  "E_TITLE": "Page not found", "E_TEXT": "The link may be old, or the page has moved.", "E_BACK": "Back to the homepage",
+  "services": [["Business websites","Fast pages that load in a second on a phone and are easy to update without a developer."],["Online shops","Catalogue, cart, payments and delivery — on a ready platform or built from scratch."],["Admin tools","Order tables, stock lists and simple dashboards that replace a dozen spreadsheets."],["Support and fixes","Speed, security updates, broken forms and everything nobody wants to touch."]],
+  "steps": [["Brief.","You describe the task; I ask questions and send an estimate with a fixed price."],["Prototype.","Clickable page layouts within a week, before any code is written."],["Build.","Weekly updates on a test address you can open at any time."],["Launch.","Moving to your domain, analytics, a short guide on editing content."]],
+  "projects": [["Linden Bakery","Online shop","Pre-orders for bread and cakes with pickup slots."],["Harbor Bikes","Website and booking","Repair bookings and a rental calendar for a bike workshop."],["Northfield Dental","Clinic website","Doctor profiles, prices and an appointment form."],["Pine & Paper","Online shop","Stationery shop with gift wrapping options."],["Atlas Logistics","Admin tool","Shipment tracking table for a three-person office."],["Morning Studio","Portfolio","A gallery site for a wedding photographer."],["Greenline Garden","Online shop","Seeds and seedlings with seasonal catalogues."],["Kettle & Co","Landing page","Launch page for a tea subscription service."]]
+ },
+ "ru": {
+  "names": [["Даниил","Ростов"],["Марк","Елисеев"],["Анна","Петракова"],["Лев","Варгин"],["Нина","Холодова"],["Павел","Кессель"],["Ева","Линдова"],["Иван","Марков"],["Сара","Новикова"],["Тимур","Брандт"]],
+  "T_TITLE": "сайты и интернет-магазины для небольшого бизнеса",
+  "T_DESC": "Веб-разработчик на фрилансе: быстрые сайты, интернет-магазины и внутренние инструменты для малого бизнеса.",
+  "N_WORK": "Работы", "N_SERVICES": "Услуги", "N_PROCESS": "Как работаю", "N_CONTACT": "Контакты", "N_ALL": "Все проекты",
+  "H_LEAD": "Делаю быстрые и аккуратные сайты и интернет-магазины для небольшого бизнеса.",
+  "H_SUB": "На фрилансе с {{SINCE}} года. Беру два-три проекта одновременно, поэтому вы общаетесь напрямую с тем, кто пишет код.",
+  "H_CTA": "Написать мне",
+  "S_WORK": "Избранные работы", "S_SERVICES": "Чем могу помочь", "S_PROCESS": "Как идёт проект", "S_CONTACT": "Есть задача?",
+  "C_TEXT": "Опишите, что нужно и к какому сроку. Отвечаю в течение рабочего дня — обычно с парой уточняющих вопросов и примерной оценкой.",
+  "C_NOTE": "Созвоны — только после короткого описания задачи: так быстрее для нас обоих.",
+  "W_TITLE": "Проекты", "W_LEAD": "Более полный список последних работ. Некоторые клиенты просили не называть их, поэтому часть проектов описана только по отрасли.",
+  "W_YEAR": "Год", "W_PROJECT": "Проект", "W_TYPE": "Тип",
+  "F_NOTE": "Сайты, магазины и инструменты для малого бизнеса.",
+  "E_TITLE": "Страница не найдена", "E_TEXT": "Возможно, ссылка устарела или страница переехала.", "E_BACK": "На главную",
+  "services": [["Сайты компаний","Быстрые страницы, которые открываются за секунду на телефоне и легко правятся без программиста."],["Интернет-магазины","Каталог, корзина, оплата и доставка — на готовой платформе или с нуля."],["Внутренние инструменты","Таблицы заказов, учёт остатков и простые панели вместо десятка Excel-файлов."],["Поддержка","Скорость, обновления безопасности, сломанные формы и всё, что никто не хочет трогать."]],
+  "steps": [["Задача.","Вы описываете задачу, я задаю вопросы и присылаю оценку с фиксированной ценой."],["Прототип.","Кликабельные макеты страниц за неделю, до написания кода."],["Разработка.","Еженедельные обновления на тестовом адресе, который можно открыть в любой момент."],["Запуск.","Перенос на ваш домен, аналитика, короткая инструкция по правке содержимого."]],
+  "projects": [["Пекарня «Липа»","Интернет-магазин","Предзаказ хлеба и тортов со слотами самовывоза."],["Веломастерская «Гавань»","Сайт и запись","Запись на ремонт и календарь проката."],["Стоматология «Северная»","Сайт клиники","Профили врачей, цены и форма записи."],["«Бумага и сосна»","Интернет-магазин","Магазин канцелярии с подарочной упаковкой."],["«Атлас Логистик»","Внутренний инструмент","Таблица отслеживания грузов для небольшого офиса."],["Студия «Утро»","Портфолио","Галерея для свадебного фотографа."],["«Зелёная линия»","Интернет-магазин","Семена и рассада с сезонными каталогами."],["«Чайник и Ко»","Лендинг","Страница запуска подписки на чай."]]
+ }
+}

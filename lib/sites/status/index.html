@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{T_TITLE}}</title>
+<meta name="description" content="{{T_DESC}}">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+<header class="top"><a class="brand" href="/">{{BRAND}}</a><nav><a href="/" aria-current="page">{{N_STATUS}}</a><a href="/history">{{N_HISTORY}}</a></nav></header>
+<main>
+  <section class="state" id="state" data-s="load">
+    <span class="dot" aria-hidden="true"></span>
+    <div><h1 id="state-text">{{S_LOADING}}</h1><p class="when" id="updated"></p></div>
+  </section>
+
+  <section class="host">
+    <h2>{{S_HOST}} <span class="hn">{{HOST}}</span></h2>
+    <dl class="metrics">
+      <div><dt>{{S_UPTIME}}</dt><dd id="m-up">—</dd></div>
+      <div><dt>{{S_LOAD}}</dt><dd id="m-load">—</dd><small id="m-cpu"></small></div>
+      <div><dt>{{S_MEM}}</dt><dd id="m-mem">—</dd><span class="meter"><i id="b-mem"></i></span></div>
+      <div><dt>{{S_DISK}}</dt><dd id="m-disk">—</dd><span class="meter"><i id="b-disk"></i></span></div>
+    </dl>
+  </section>
+
+  <section class="days">
+    <div class="days-head"><h2>{{S_DAYS}}</h2><span id="avg"></span></div>
+    <div class="bars" id="bars" role="img" aria-label="{{S_DAYS}}"></div>
+    <div class="axis"><span>{{S_AGO}}</span><span>{{S_TODAY}}</span></div>
+  </section>
+  <p class="about">{{S_ABOUT}}</p>
+</main>
+<footer>© {{YEAR}} {{BRAND}}</footer>
+</div>
+<script>window.T={ok:"{{S_OK}}",warn:"{{S_WARN}}",nodata:"{{S_NODATA}}",upd:"{{S_UPDATED}}",nohist:"{{S_NOHIST}}",avg:"{{S_AVG}}",d:"{{S_D}}",h:"{{S_H}}",m:"{{S_M}}",cores:"{{S_CORES}}",lang:"{{LANG}}"};</script>
+<script src="/app.js" defer></script>
+</body>
+</html>

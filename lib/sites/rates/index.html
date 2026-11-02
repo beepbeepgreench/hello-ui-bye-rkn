@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{T_TITLE}}</title>
+<meta name="description" content="{{T_DESC}}">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="band">
+  <div class="wrap top"><a class="brand" href="/"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 22l6-6 4 3 9-9" stroke="currentColor" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>{{BRAND}}</a>
+    <nav><a href="/" aria-current="page">{{N_RATES}}</a><a href="/about">{{N_ABOUT}}</a></nav></div>
+  <form class="wrap conv" id="conv" onsubmit="return false">
+    <h1>{{C_TITLE}}</h1>
+    <div class="row">
+      <label><span>{{C_AMOUNT}}</span><input id="amt" type="text" inputmode="decimal" value="100" autocomplete="off"></label>
+      <label><span>{{C_FROM}}</span><select id="from"></select></label>
+      <output id="res" for="amt from">—</output>
+    </div>
+  </form>
+</header>
+<main class="wrap">
+  <h2>{{R_TITLE}}</h2>
+  <table class="rates">
+    <thead><tr><th>{{R_CUR}}</th><th class="n">{{R_RATE}}</th><th class="n">{{R_CHG}}</th><th class="t">{{R_TREND}}</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="4" class="empty">{{R_NODATA}}</td></tr></tbody>
+  </table>
+  <p class="upd" id="upd"></p>
+</main>
+<footer class="wrap">© {{YEAR}} {{BRAND}} · <a href="/about">{{N_ABOUT}}</a></footer>
+<script>window.R={base:"{{BASE}}",lang:"{{LANG}}",upd:"{{R_UPD}}",per:"{{R_PER}}",names:{{NAMES_JSON}}};</script>
+<script src="/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{W_TITLE}} — {{NAME}}</title>
+<meta name="description" content="{{T_DESC}}">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="mark" href="/"><span class="mono">{{INITIALS}}</span>{{NAME}}</a>
+  <nav><a href="/#work">{{N_WORK}}</a><a href="/#services">{{N_SERVICES}}</a><a href="/#process">{{N_PROCESS}}</a><a href="/#contact">{{N_CONTACT}}</a></nav>
+</header>
+<main class="page">
+  <h1>{{W_TITLE}}</h1>
+  <p class="sub">{{W_LEAD}}</p>
+  <table class="list">
+    <thead><tr><th>{{W_YEAR}}</th><th>{{W_PROJECT}}</th><th>{{W_TYPE}}</th></tr></thead>
+    <tbody>
+{{WORKROWS}}
+    </tbody>
+  </table>
+  <p><a class="btn" href="mailto:{{MAIL}}">{{H_CTA}}</a></p>
+</main>
+<footer><p>© {{SINCE}}–{{YEAR}} {{NAME}}. {{F_NOTE}}</p></footer>
+</body>
+</html>

@@ -1,0 +1,30 @@
+{
+ "en": {
+  "hosts": ["atlas","birch","kestrel","nimbus","quarry","tern","willow","orion"],
+  "T_TITLE": "{{BRAND}} status", "T_DESC": "Current status and uptime history of the {{BRAND}} servers.",
+  "N_STATUS": "Status", "N_HISTORY": "Maintenance log",
+  "S_LOADING": "Checking current status…",
+  "S_OK": "All systems operational", "S_WARN": "Degraded performance", "S_NODATA": "Status data is being collected",
+  "S_UPDATED": "Updated", "S_HOST": "Server", "S_UPTIME": "Uptime", "S_LOAD": "Load", "S_MEM": "Memory", "S_DISK": "Disk",
+  "S_DAYS": "Uptime, last 90 days", "S_AGO": "90 days ago", "S_TODAY": "Today", "S_NOHIST": "No data", "S_AVG": "average",
+  "S_D": "d", "S_H": "h", "S_M": "min", "S_CORES": "cores",
+  "S_ABOUT": "This page is updated every minute by the server itself. Planned work is announced in the maintenance log.",
+  "H_TITLE": "Maintenance log", "H_LEAD": "Planned work and past incidents. Times are in UTC.",
+  "events": [["Kernel security update","Planned reboot to apply a kernel update. Services were unavailable for about two minutes."],["Certificate renewed","TLS certificates were renewed automatically. No downtime."],["Disk cleanup","Old logs and package caches were removed; disk usage went down by a third."],["Provider network maintenance","The hosting provider replaced a switch in the data centre. Short packet loss for about ten minutes."],["Backup check","Monthly restore test of the nightly backups completed successfully."]],
+  "E_TITLE": "Page not found", "E_TEXT": "There is nothing at this address.", "E_BACK": "Back to status"
+ },
+ "ru": {
+  "hosts": ["atlas","birch","kestrel","nimbus","quarry","tern","willow","orion"],
+  "T_TITLE": "Статус {{BRAND}}", "T_DESC": "Текущее состояние и история доступности серверов {{BRAND}}.",
+  "N_STATUS": "Состояние", "N_HISTORY": "Журнал работ",
+  "S_LOADING": "Проверяю текущее состояние…",
+  "S_OK": "Все системы работают", "S_WARN": "Работа с замедлением", "S_NODATA": "Данные о состоянии собираются",
+  "S_UPDATED": "Обновлено", "S_HOST": "Сервер", "S_UPTIME": "Без перезагрузки", "S_LOAD": "Нагрузка", "S_MEM": "Память", "S_DISK": "Диск",
+  "S_DAYS": "Доступность за 90 дней", "S_AGO": "90 дней назад", "S_TODAY": "Сегодня", "S_NOHIST": "Нет данных", "S_AVG": "в среднем",
+  "S_D": "д", "S_H": "ч", "S_M": "мин", "S_CORES": "ядра",
+  "S_ABOUT": "Страница обновляется каждую минуту самим сервером. О плановых работах сообщаем в журнале.",
+  "H_TITLE": "Журнал работ", "H_LEAD": "Плановые работы и прошлые сбои. Время указано в UTC.",
+  "events": [["Обновление ядра","Плановая перезагрузка для обновления ядра. Сервисы были недоступны около двух минут."],["Продление сертификатов","TLS-сертификаты продлены автоматически, без простоя."],["Очистка диска","Удалены старые журналы и кэш пакетов, занятое место уменьшилось на треть."],["Работы у провайдера","Хостинг-провайдер заменил коммутатор в дата-центре. Кратковременные потери пакетов около десяти минут."],["Проверка бэкапов","Ежемесячная проверка восстановления из ночных бэкапов прошла успешно."]],
+  "E_TITLE": "Страница не найдена", "E_TEXT": "По этому адресу ничего нет.", "E_BACK": "К состоянию"
+ }
+}

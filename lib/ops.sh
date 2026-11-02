@@ -281,6 +281,11 @@ ops_status(){
   fi
 
   if declare -F domain_status >/dev/null; then domain_status; fi
+  if [ -n "${DOMAIN:-}" ] && [ "${DOMAIN_CERT_MODE:-letsencrypt}" != selfsigned ]; then
+    if systemctl is-enabled --quiet certbot.timer 2>/dev/null; then _ops_mark ok "автопродление сертификата: certbot.timer"
+    elif [ -f /etc/cron.d/certbot ] || [ -f /etc/cron.d/vpn-setup-certbot ]; then _ops_mark ok "автопродление сертификата: cron"
+    else _ops_mark warn "автопродление сертификата не настроено — выполни: vpn-setup domain $DOMAIN"; fi
+  fi
 
   echo
   if [ "$_OPS_FAIL" = 0 ]; then echo -e "${c_ok:-}Критичных проблем нет.${c_no:-}"; return 0; fi
@@ -424,6 +429,7 @@ ops_uninstall(){
     echo "  свой домен $DOMAIN: убираю наш сайт из nginx и порт 80 (сертификат и файлы сайта остаются)"
     _ops_run domain_disable
   fi
+  if [ -f /etc/cron.d/vpn-setup-certbot ]; then _ops_run rm -f /etc/cron.d/vpn-setup-certbot; fi
 
   step "Удаление 6/6: каталог состояния"
   if [ -d "$STATE" ]; then
@@ -454,17 +460,20 @@ ops_help(){
   cat <<'EOF'
 vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
-Использование:  vpn-setup [команда]      (то же: bash /root/vpn-setup/install.sh [команда])
+Использование:  vpn-setup               меню (как у x-ui): все действия по номерам
+                vpn-setup [команда]     то же без меню (bash /root/vpn-setup/install.sh [команда])
 
+  install           установка или повторная установка/проверка без меню
   update            обновить скрипт с GitHub и применить (пользователи и ссылки сохраняются)
   panel             как зайти в панель 3X-UI (SSH-туннель): готовые шаги для Windows/macOS/MobaXterm/PuTTY/телефона
   precheck [ПОРТ]   ДО установки: проверить, доходят ли данные с домашнего ПК до этого IP
                     (на ПК в это время: bash check-server.sh IP ПОРТ)
-  (без команды)     установка или обновление; повторный запуск безопасен,
-                    новые имена из USERS добавляются, старые ссылки не меняются
+  (без команды)     в терминале — меню; без терминала (cron, скрипт) или с USERS=/DOMAIN=/SNI= — установка.
+                    Повторный запуск безопасен: новые имена из USERS добавляются, старые ссылки не меняются
   harden-ssh        отключить вход по паролю (только после проверки входа по ключу!)
   sni [ДОМЕН]       подобрать/проверить сайт маскировки Reality (без аргумента — подбор)
   domain ДОМЕН|off  свой домен: Reality маскируется под твой настоящий сайт на этом сервере (см. README)
+  site [ШАБЛОН]     сайт-заглушка на своём домене: список шаблонов / сменить шаблон
   status            проверка состояния: службы, порты, firewall, fail2ban, SSH, диск, RAM,
                     бэкапы, версии; код выхода 1, если есть ✗
   links [ИМЯ]       показать ссылки (всех или одного пользователя) и пересоздать QR в /root/vpn-setup/qr/
@@ -474,6 +483,7 @@ vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
   version           версия скрипта и 3X-UI
   help              эта справка
 
-Переменные установки: USERS, SSH_PUBKEY, SNI, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
+Переменные установки: USERS, SSH_PUBKEY, SNI, DOMAIN, SITE_TEMPLATE, COUNTRY, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
+  (VPN_SETUP_MENU=0 — не показывать меню)
 EOF
 }

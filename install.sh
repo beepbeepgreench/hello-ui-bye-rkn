@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# vpn-setup v1.0.4 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
+# vpn-setup v1.1.0 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
 # Ubuntu 22.04 / 24.04 / 26.04, amd64/arm64, запуск от root, на ЧИСТОМ сервере.
 #
-#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.4/install.sh)
+#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.1.0/install.sh)
 #   Потом:       bash /root/vpn-setup/install.sh help
 #
 # Переменные (необязательно, иначе спросит): USERS, SSH_PUBKEY, SNI, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
 set -Eeuo pipefail
 
-SCRIPT_VERSION="v1.0.4"
-SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.4/install.sh"
+SCRIPT_VERSION="v1.1.0"
+SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.1.0/install.sh"
 XUI_VERSION="v3.11.0"   # закреплено: проверено с Xray 26.10.21 (Reality-XHTTP, Sudoku, VLESS-enc)
 declare -A XUI_SHA256=(
   [amd64]="0ddfa4702f595442e2962acd81addc768fdacaa4ff2672c971a0463dae744916"
@@ -692,6 +692,11 @@ ops_status(){
   fi
 
   if declare -F domain_status >/dev/null; then domain_status; fi
+  if [ -n "${DOMAIN:-}" ] && [ "${DOMAIN_CERT_MODE:-letsencrypt}" != selfsigned ]; then
+    if systemctl is-enabled --quiet certbot.timer 2>/dev/null; then _ops_mark ok "автопродление сертификата: certbot.timer"
+    elif [ -f /etc/cron.d/certbot ] || [ -f /etc/cron.d/vpn-setup-certbot ]; then _ops_mark ok "автопродление сертификата: cron"
+    else _ops_mark warn "автопродление сертификата не настроено — выполни: vpn-setup domain $DOMAIN"; fi
+  fi
 
   echo
   if [ "$_OPS_FAIL" = 0 ]; then echo -e "${c_ok:-}Критичных проблем нет.${c_no:-}"; return 0; fi
@@ -835,6 +840,7 @@ ops_uninstall(){
     echo "  свой домен $DOMAIN: убираю наш сайт из nginx и порт 80 (сертификат и файлы сайта остаются)"
     _ops_run domain_disable
   fi
+  if [ -f /etc/cron.d/vpn-setup-certbot ]; then _ops_run rm -f /etc/cron.d/vpn-setup-certbot; fi
 
   step "Удаление 6/6: каталог состояния"
   if [ -d "$STATE" ]; then
@@ -865,17 +871,20 @@ ops_help(){
   cat <<'EOF'
 vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
-Использование:  vpn-setup [команда]      (то же: bash /root/vpn-setup/install.sh [команда])
+Использование:  vpn-setup               меню (как у x-ui): все действия по номерам
+                vpn-setup [команда]     то же без меню (bash /root/vpn-setup/install.sh [команда])
 
+  install           установка или повторная установка/проверка без меню
   update            обновить скрипт с GitHub и применить (пользователи и ссылки сохраняются)
   panel             как зайти в панель 3X-UI (SSH-туннель): готовые шаги для Windows/macOS/MobaXterm/PuTTY/телефона
   precheck [ПОРТ]   ДО установки: проверить, доходят ли данные с домашнего ПК до этого IP
                     (на ПК в это время: bash check-server.sh IP ПОРТ)
-  (без команды)     установка или обновление; повторный запуск безопасен,
-                    новые имена из USERS добавляются, старые ссылки не меняются
+  (без команды)     в терминале — меню; без терминала (cron, скрипт) или с USERS=/DOMAIN=/SNI= — установка.
+                    Повторный запуск безопасен: новые имена из USERS добавляются, старые ссылки не меняются
   harden-ssh        отключить вход по паролю (только после проверки входа по ключу!)
   sni [ДОМЕН]       подобрать/проверить сайт маскировки Reality (без аргумента — подбор)
   domain ДОМЕН|off  свой домен: Reality маскируется под твой настоящий сайт на этом сервере (см. README)
+  site [ШАБЛОН]     сайт-заглушка на своём домене: список шаблонов / сменить шаблон
   status            проверка состояния: службы, порты, firewall, fail2ban, SSH, диск, RAM,
                     бэкапы, версии; код выхода 1, если есть ✗
   links [ИМЯ]       показать ссылки (всех или одного пользователя) и пересоздать QR в /root/vpn-setup/qr/
@@ -885,7 +894,8 @@ vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
   version           версия скрипта и 3X-UI
   help              эта справка
 
-Переменные установки: USERS, SSH_PUBKEY, SNI, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
+Переменные установки: USERS, SSH_PUBKEY, SNI, DOMAIN, SITE_TEMPLATE, COUNTRY, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
+  (VPN_SETUP_MENU=0 — не показывать меню)
 EOF
 }
 
@@ -1057,6 +1067,13 @@ server {
     index index.html;
     error_page 404 /404.html;
     location = /favicon.ico { log_not_found off; access_log off; try_files /favicon.ico =404; }
+    location ~ /\. { return 404; }
+    location ^~ /data/ {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        try_files \$uri =404;
+    }
     location / { try_files \$uri \$uri.html \$uri/ =404; }
 }
 EOF
@@ -1069,83 +1086,493 @@ EOF
   _domain_nginx_reload || die "nginx не принял конфиг (вывод nginx -t выше). Файл: $conf"
 }
 
-# ---------- сайт-заглушка ----------
-domain_decoy(){ # создаёт сайт в $DOMAIN_WWW_ROOT/ДОМЕН, если там ещё нет index.html (свой сайт не трогаем)
-  local d="$1" dir title y
+# ---------- сайт-заглушка (шаблоны lib/sites/<id>) ----------
+# Шаблоны вшиты в install.sh при сборке (build.sh → base64 tar.gz). В исходниках (тесты) берутся из lib/sites.
+DOMAIN_CRON_FILE=${DOMAIN_CRON_FILE:-/etc/cron.d/vpn-setup-site}
+DOMAIN_SITE_MARK=.vpn-setup-site
+DOMAIN_SITES_SRC=${DOMAIN_SITES_SRC:-}
+_domain_sites_payload(){ cat <<'SITESEOF'
+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
+AEABAA==
+SITESEOF
+}
+_domain_sites_dir(){ # печатает каталог с распакованными шаблонами (render.py, card/, status/, rates/)
+  local p dir here
+  if [ -n "$DOMAIN_SITES_SRC" ] && [ -f "$DOMAIN_SITES_SRC/render.py" ]; then echo "$DOMAIN_SITES_SRC"; return 0; fi
+  p=$(_domain_sites_payload)
+  if [ ${#p} -lt 100 ]; then   # несобранный модуль: шаблоны рядом, в lib/sites
+    here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    [ -f "$here/sites/render.py" ] || die "шаблоны сайтов не найдены ($here/sites)"
+    echo "$here/sites"; return 0
+  fi
+  dir="$STATE/site/src"
+  rm -rf "$dir"; install -d -m 700 "$dir"
+  base64 -d <<<"$p" | tar -xzf - -C "$dir" || die "не удалось распаковать шаблоны сайтов"
+  echo "$dir"
+}
+domain_site_list(){ # id|Название|описание
+  echo "card|Визитка разработчика|страница фрилансера-веб-разработчика: работы, услуги, контакты"
+  echo "status|Статус серверов|страница доступности с живыми данными этого сервера (аптайм, нагрузка, диск)"
+  echo "rates|Курсы валют|курсы и конвертер валют, обновляются каждый час с открытого источника"
+}
+_domain_site_valid(){ domain_site_list | cut -d'|' -f1 | grep -qx -- "${1:-}"; }
+_domain_site_hash(){ # хэш шаблона: при обновлении скрипта изменившийся шаблон пересобирается
+  local src="$1" id="$2"
+  (cd "$src" && find "$id" render.py -type f ! -name '*.pyc' -print0 | sort -z | xargs -0 cat) | sha256sum | cut -c1-16
+}
+_domain_site_cron(){ # _domain_site_cron ID ДОМЕН — периодическое обновление данных сайта (или удаление)
+  local id="$1" d="$2" py dir="$DOMAIN_WWW_ROOT/$2/data" m
+  py=$(command -v python3 || echo /usr/bin/python3)
+  case "$id" in
+    status) printf '# vpn-setup: данные страницы статуса %s\nSHELL=/bin/sh\n* * * * * root %s -I %s %s >/dev/null 2>&1\n' \
+              "$d" "$py" "$STATE/site/collect.py" "$dir" > "$DOMAIN_CRON_FILE" ;;
+    rates)  m=$(( $(printf '%s' "$d" | cksum | cut -d' ' -f1) % 50 + 5 ))
+            printf '# vpn-setup: курсы валют для %s (раз в час)\nSHELL=/bin/sh\n%s * * * * root %s -I %s %s >/dev/null 2>&1\n' \
+              "$d" "$m" "$py" "$STATE/site/fetch.py" "$dir" > "$DOMAIN_CRON_FILE" ;;
+    *)      rm -f "$DOMAIN_CRON_FILE"; return 0 ;;
+  esac
+  chmod 644 "$DOMAIN_CRON_FILE"
+}
+domain_site_deploy(){ # domain_site_deploy ДОМЕН [ID] — сайт из шаблона; свой сайт пользователя не трогаем
+  local d="$1" id="${2:-${SITE_TEMPLATE:-card}}" dir src hash old_id="" old_hash="" f list
+  _domain_site_valid "$id" || die "нет такого шаблона сайта: $id (варианты: $(domain_site_list | cut -d'|' -f1 | tr '\n' ' '))"
   dir="$DOMAIN_WWW_ROOT/$d"
-  if [ -f "$dir/index.html" ]; then echo "сайт: $dir уже есть — не трогаю"; return 0; fi
-  install -d -m 755 "$dir" "$dir/notes"
-  title=$(python3 -I -c 'import sys; b=sys.argv[1].split(".")[0].encode().decode("idna") if sys.argv[1].startswith("xn--") else sys.argv[1].split(".")[0]; print(" ".join(w.capitalize() for w in b.replace("_","-").split("-")))' "$d" 2>/dev/null) || title="Field Notes"
-  y=$(date +%Y)
-  cat > "$dir/style.css" <<'EOF'
-:root{--bg:#fbfaf7;--fg:#22211f;--mut:#6d6a63;--acc:#2f6f5e;--line:#e7e3da}
-@media (prefers-color-scheme:dark){:root{--bg:#171715;--fg:#e9e6df;--mut:#a29e94;--acc:#7cc2ad;--line:#2c2b27}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 Georgia,"Times New Roman",serif}
-.wrap{max-width:720px;margin:0 auto;padding:40px 20px 64px}
-header{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:28px}
-header a.brand{font-size:22px;font-weight:bold;color:var(--fg);text-decoration:none}
-nav a{color:var(--mut);margin-left:16px;text-decoration:none;font-family:system-ui,sans-serif;font-size:15px}nav a:hover{color:var(--acc)}
-h1,h2{line-height:1.25}a{color:var(--acc)}.meta{color:var(--mut);font:14px system-ui,sans-serif}
-article{margin-bottom:34px}article h2{margin:0 0 4px;font-size:22px}article h2 a{color:var(--fg);text-decoration:none}
-footer{border-top:1px solid var(--line);margin-top:40px;padding-top:14px;color:var(--mut);font:14px system-ui,sans-serif}
-EOF
-  cat > "$dir/favicon.svg" <<'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2f6f5e"/><path d="M9 22c4-1 7-5 8-12 2 5 4 9 7 11" stroke="#fbfaf7" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>
-EOF
-  _domain_page(){ # _domain_page ФАЙЛ ЗАГОЛОВОК ТЕЛО
-    cat > "$1" <<EOF
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>$2</title><meta name="description" content="Notes on film photography, long walks and small repairs.">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"></head>
-<body><div class="wrap">
-<header><a class="brand" href="/">$title</a><nav><a href="/">Notes</a><a href="/about">About</a></nav></header>
-$3
-<footer>© $y $title · written slowly, published rarely</footer>
-</div></body></html>
-EOF
-  }
-  _domain_page "$dir/index.html" "$title — notes" '
-<article><h2><a href="/notes/expired-film">Shooting expired film in winter</a></h2>
-<p class="meta">January · 6 min read</p>
-<p>Three rolls of Fomapan that expired in 2009, one cheap rangefinder and a week of grey skies. What came out, what did not, and why I now overexpose everything by two stops.</p></article>
-<article><h2><a href="/notes/bike-wheel">Truing a bicycle wheel without a stand</a></h2>
-<p class="meta">November · 4 min read</p>
-<p>Zip ties, a spoke key and patience. A small guide for the kitchen-table mechanic.</p></article>
-<article><h2><a href="/notes/river-walk">Forty kilometres along the river</a></h2>
-<p class="meta">September · 8 min read</p>
-<p>Two days, one tent, too many photos of bridges. A route that is flat, quiet and has a bakery at both ends.</p></article>'
-  _domain_page "$dir/about.html" "About — $title" '
-<h1>About</h1>
-<p>Hi. This is a small personal notebook: film photography, walking routes, and fixing things instead of throwing them away.</p>
-<p>No ads, no tracking, no newsletter. Posts appear when there is something worth writing down.</p>'
-  _domain_page "$dir/notes/expired-film.html" "Shooting expired film in winter — $title" '
-<h1>Shooting expired film in winter</h1><p class="meta">January · 6 min read</p>
-<p>Old black-and-white film loses speed and gains fog. The usual rule is one stop of extra exposure per decade; with cold storage you can be gentler.</p>
-<p>I metered for ISO 25 instead of 100, developed in Rodinal 1+50 for eleven minutes and got thin but printable negatives. Grain is heavy, contrast is soft, and the snow looks like old paper — which is exactly what I wanted.</p>'
-  _domain_page "$dir/notes/bike-wheel.html" "Truing a bicycle wheel without a stand — $title" '
-<h1>Truing a bicycle wheel without a stand</h1><p class="meta">November · 4 min read</p>
-<p>Flip the bike, fix a zip tie to the frame so its tail almost touches the rim, and spin. Where the rim touches the tie, loosen the spoke on that side and tighten the opposite one by a quarter turn.</p>
-<p>Small steps. Re-check often. Stop when it is good enough — perfect is for people with stands.</p>'
-  _domain_page "$dir/notes/river-walk.html" "Forty kilometres along the river — $title" '
-<h1>Forty kilometres along the river</h1><p class="meta">September · 8 min read</p>
-<p>The path follows the old towpath almost the whole way. Water every ten kilometres, shade until noon, and a ferry that only runs on weekends — check before you go.</p>'
-  _domain_page "$dir/404.html" "Not found — $title" '<h1>Not found</h1><p>This page does not exist (any more). Try the <a href="/">notes</a>.</p>'
-  printf 'User-agent: *\nAllow: /\nSitemap: https://%s/sitemap.xml\n' "$d" > "$dir/robots.txt"
-  {
-    echo '<?xml version="1.0" encoding="UTF-8"?>'
-    echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-    for u in "" about notes/expired-film notes/bike-wheel notes/river-walk; do echo "  <url><loc>https://$d/$u</loc></url>"; done
-    echo '</urlset>'
-  } > "$dir/sitemap.xml"
-  # «живые» даты изменения: страницы писались в прошлые месяцы, а не в момент установки
-  local f i=0
-  for f in "$dir"/notes/river-walk.html "$dir"/notes/bike-wheel.html "$dir"/about.html "$dir"/notes/expired-film.html \
-           "$dir"/404.html "$dir"/style.css "$dir"/favicon.svg "$dir"/robots.txt "$dir"/sitemap.xml "$dir"/index.html; do
-    i=$((i+1)); touch -d "@$(( $(date +%s) - (200 - i*17) * 86400 - RANDOM ))" "$f" 2>/dev/null || true
-  done
+  if [ -f "$dir/$DOMAIN_SITE_MARK" ]; then
+    read -r old_id old_hash < "$dir/$DOMAIN_SITE_MARK" || true
+  elif [ -f "$dir/index.html" ]; then
+    if grep -q 'written slowly, published rarely' "$dir/index.html" 2>/dev/null; then
+      # заглушка прошлой версии vpn-setup — заменяем её файлы
+      rm -f "$dir"/index.html "$dir"/about.html "$dir"/404.html "$dir"/style.css "$dir"/favicon.svg "$dir"/robots.txt "$dir"/sitemap.xml
+      rm -rf "$dir/notes"
+    else
+      echo "сайт: в $dir уже есть свой index.html — не трогаю (шаблон «$id» не ставлю)"
+      _domain_site_cron none "$d"
+      return 0
+    fi
+  fi
+  src=$(_domain_sites_dir)
+  hash=$(_domain_site_hash "$src" "$id")
+  if [ "$old_id" = "$id" ] && [ "$old_hash" = "$hash" ]; then
+    echo "сайт: шаблон «$id» уже стоит"
+  else
+    if [ -n "$old_id" ]; then   # удаляем только файлы прошлого шаблона по манифесту; чужие файлы остаются
+      list=$(tail -n +2 "$dir/$DOMAIN_SITE_MARK")
+      while IFS= read -r f; do
+        case "$f" in ""|*..*|/*) continue ;; esac
+        rm -f "$dir/$f"
+      done <<<"$list"
+      rm -rf "$dir/data"
+    fi
+    install -d -m 755 "$dir"
+    list=$(python3 -I "$src/render.py" "$id" "$src" "$dir" "$d") || die "не удалось собрать сайт из шаблона «$id»"
+    { echo "$id $hash"; echo "$list"; } > "$dir/$DOMAIN_SITE_MARK"
+    chmod 644 "$dir/$DOMAIN_SITE_MARK"
+    echo "сайт: шаблон «$id» → $dir"
+  fi
+  install -d -m 700 "$STATE/site"
+  case "$id" in
+    status) install -m 600 "$src/status/collect.py" "$STATE/site/collect.py"
+            python3 -I "$STATE/site/collect.py" "$dir/data" || warn "сбор данных для страницы статуса не удался" ;;
+    rates)  install -m 600 "$src/rates/fetch.py" "$STATE/site/fetch.py"
+            [ -s "$dir/data/rates.json" ] || python3 -I "$STATE/site/fetch.py" "$dir/data" \
+              || warn "курсы пока не загрузились — сайт покажет «загружаются», cron повторит через час" ;;
+  esac
+  _domain_site_cron "$id" "$d"
+  [ -d "$dir/data" ] && chmod 755 "$dir/data"
   chmod -R a+rX "$dir"
-  echo "сайт-заглушка: $dir (можно заменить своими файлами — vpn-setup его больше не перезапишет)"
+  return 0
+}
+domain_decoy(){ domain_site_deploy "$1" "${SITE_TEMPLATE:-card}"; }   # совместимость
+cmd_site(){ # vpn-setup site [ID] — показать / сменить шаблон сайта-маски
+  local id="${1:-}" cur line t desc
+  require_installed; load_config
+  cur=${SITE_TEMPLATE:-card}
+  if [ -z "$id" ]; then
+    echo "Шаблоны сайта-маски (используется в режиме своего домена):"
+    while IFS='|' read -r line t desc; do
+      if [ "$line" = "$cur" ]; then printf '  * %-7s %s — %s  (текущий)\n' "$line" "$t" "$desc"
+      else printf '    %-7s %s — %s\n' "$line" "$t" "$desc"; fi
+    done < <(domain_site_list)
+    echo "Сменить: vpn-setup site ID     Свой сайт: положи файлы в /var/www/ДОМЕН (шаблон его не перезапишет)"
+    [ -n "${DOMAIN:-}" ] || echo "Сейчас домен не подключён — шаблон будет использован после: vpn-setup domain ДОМЕН"
+    return 0
+  fi
+  _domain_site_valid "$id" || die "нет такого шаблона: $id. Список: vpn-setup site"
+  SITE_TEMPLATE="$id"
+  if [ -n "${DOMAIN:-}" ]; then domain_site_deploy "$DOMAIN" "$id"; fi
+  save_config
+  echo "шаблон сайта: $id"
 }
 
 # ---------- сертификат ----------
@@ -1198,7 +1625,7 @@ domain_setup(){ # domain_setup ДОМЕН IP — nginx + сайт + сертиф
     [ "$rc" = 0 ] || die "apt: не удалось поставить nginx/certbot"
   fi
   DOMAIN_PORT=$(domain_pick_port)   # сохранённый порт переиспользуется (DOMAIN_PORT из config.env)
-  domain_decoy "$d"
+  domain_site_deploy "$d" "${SITE_TEMPLATE:-card}"
   domain_write_nginx "$d" "$DOMAIN_PORT" http
   domain_cert "$d"
   domain_write_nginx "$d" "$DOMAIN_PORT" full
@@ -1216,6 +1643,7 @@ domain_local_probe(){ # domain_local_probe ДОМЕН ПОРТ — TLS1.3 + h2 +
 domain_disable(){ # убрать наш сайт из nginx (сертификат и файлы сайта остаются), закрыть :80
   local conf="$DOMAIN_NGINX_DIR/sites-available/$DOMAIN_CONF_NAME"
   rm -f "$DOMAIN_NGINX_DIR/sites-enabled/$DOMAIN_CONF_NAME" "$conf" "$DOMAIN_HOOK"
+  rm -f "$DOMAIN_CRON_FILE"   # обновление данных сайта (статус/курсы) больше не нужно
   if [ -f "$STATE/domain.nginx-installed" ]; then
     systemctl disable --now nginx >/dev/null 2>&1 || true
     rm -f "$STATE/domain.nginx-installed"
@@ -1273,12 +1701,39 @@ load_config(){
 }
 save_config(){
   ( umask 077
-    printf 'USERS=%q\nSNI=%q\nPORT_REALITY=%q\nPORT_SUDOKU=%q\nPORT_XHTTP=%q\nPUBLIC_IP=%q\nCOUNTRY=%q\nDOMAIN=%q\nDOMAIN_PORT=%q\nBORROWED_SNI=%q\nINSTALLED_VERSION=%q\n' \
+    printf 'USERS=%q\nSNI=%q\nPORT_REALITY=%q\nPORT_SUDOKU=%q\nPORT_XHTTP=%q\nPUBLIC_IP=%q\nCOUNTRY=%q\nDOMAIN=%q\nDOMAIN_PORT=%q\nBORROWED_SNI=%q\nSITE_TEMPLATE=%q\nINSTALLED_VERSION=%q\n' \
       "${USERS:-}" "${SNI:-}" "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" "${PUBLIC_IP:-}" "${COUNTRY:-}" \
-      "${DOMAIN:-}" "${DOMAIN_PORT:-}" "${BORROWED_SNI:-}" "$SCRIPT_VERSION" > "$STATE/config.env" )
+      "${DOMAIN:-}" "${DOMAIN_PORT:-}" "${BORROWED_SNI:-}" "${SITE_TEMPLATE:-}" "$SCRIPT_VERSION" > "$STATE/config.env" )
 }
 require_installed(){
   [ -f "$STATE/panel.env" ] && [ -x /usr/local/x-ui/x-ui ] || die "установка не найдена. Сначала: bash install.sh"
+}
+is_installed(){ [ -f "$STATE/panel.env" ] && [ -x /usr/local/x-ui/x-ui ]; }
+self_path(){ # путь к файлу этого скрипта (для запуска подкоманд отдельным процессом)
+  if [ -f "$0" ]; then readlink -f "$0"; elif [ -f "$STATE/install.sh" ]; then echo "$STATE/install.sh"; fi
+  return 0
+}
+run_self(){ # run_self КОМАНДА… — подкоманда отдельным процессом: её ошибка (die) не обрывает вызывающего
+  local s; s=$(self_path)
+  [ -n "$s" ] || { warn "нет файла скрипта ($STATE/install.sh) — шаг пропущен"; return 1; }
+  VPN_SETUP_REEXEC=1 bash "$s" "$@"
+}
+ensure_cert_renewal(){ # автопродление сертификата: certbot.timer, иначе cron (продление вызывает deploy-hook → reload nginx)
+  [ "${DOMAIN_CERT_MODE:-letsencrypt}" = selfsigned ] && return 0
+  local m
+  if systemctl is-enabled --quiet certbot.timer 2>/dev/null; then
+    systemctl start certbot.timer >/dev/null 2>&1 || true
+    echo "автопродление сертификата: certbot.timer (проверка дважды в сутки)"
+  elif [ -f /etc/cron.d/certbot ] || [ -f /etc/cron.d/vpn-setup-certbot ]; then
+    echo "автопродление сертификата: cron"
+  else
+    m=$(( $(od -An -N1 -tu1 /dev/urandom) % 60 ))
+    printf 'SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n%s 4,16 * * * root certbot renew -q\n' "$m" \
+      > /etc/cron.d/vpn-setup-certbot
+    chmod 644 /etc/cron.d/vpn-setup-certbot
+    echo "автопродление сертификата: cron /etc/cron.d/vpn-setup-certbot (дважды в сутки)"
+  fi
+  return 0
 }
 write_helpers(){
   install -d -m 700 "$STATE" "$STATE/keys"
@@ -2520,7 +2975,7 @@ install_cli(){ # короткая команда vpn-setup и подсказка
 #!/bin/sh
 [ -f /root/vpn-setup/config.env ] || exit 0
 echo
-echo " VPN-сервер (vpn-setup). Команды:  vpn-setup status | vpn-setup panel | vpn-setup links | vpn-setup help"
+echo " VPN-сервер (vpn-setup). Меню управления:  vpn-setup      (команды: vpn-setup help)"
 [ -f /etc/ssh/sshd_config.d/00-hardening.conf ] || echo " ! Вход по паролю включён. Когда войдёшь по ключу:  vpn-setup harden-ssh"
 [ -f /var/run/reboot-required ] && echo " ! Ожидают перезагрузки обновления безопасности:  reboot  (VPN пропадёт на 1–2 мин)"
 exit 0
@@ -2639,9 +3094,39 @@ cmd_sni(){
   warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
 }
 
+choose_site_template(){ # шаблон сайта-заглушки (из модуля сайтов); Enter — первый. Пишет SITE_TEMPLATE
+  declare -F domain_site_list >/dev/null || return 0
+  [ -z "${SITE_TEMPLATE:-}" ] || return 0
+  local list="" ans="" ids n
+  list=$(domain_site_list 2>/dev/null | awk 'NF') || true
+  [ -n "$list" ] || return 0
+  ids=$(printf '%s\n' "$list" | awk -F'|' '{print $1}')
+  if (: </dev/tty) 2>/dev/null; then
+    echo "Какой сайт показывать на домене всем «чужим» (потом можно сменить: vpn-setup site, или заменить своими файлами):"
+    printf '%s\n' "$list" | awk -F'|' '{printf "  %d) %s — %s\n", NR, $2, $3}'
+    ask ans "Номер шаблона" "1"
+  fi
+  ans=${ans:-1}
+  if [[ "$ans" =~ ^[0-9]+$ ]]; then n=$ans; SITE_TEMPLATE=$(printf '%s\n' "$ids" | sed -n "${n}p")
+  elif printf '%s\n' "$ids" | grep -qx -- "$ans"; then SITE_TEMPLATE="$ans"; fi
+  [ -n "${SITE_TEMPLATE:-}" ] || SITE_TEMPLATE=$(printf '%s\n' "$ids" | sed -n 1p)
+  echo "сайт-заглушка: $SITE_TEMPLATE"
+}
+domain_fail_cleanup(){ # EXIT-ловушка cmd_domain: при ошибке вернуть сервер как было
+  local rc=$?
+  [ "$rc" = 0 ] && return 0
+  if [ -n "${DOMAIN_FAIL_HAD:-}" ]; then  # переключались с другого своего домена — вернуть его сайт в nginx
+    ( DOMAIN_SKIP_DNS=1 domain_setup "$DOMAIN_FAIL_HAD" "${PUBLIC_IP:-}" ) >/dev/null 2>&1 \
+      || warn "не удалось вернуть сайт $DOMAIN_FAIL_HAD — выполни: vpn-setup domain $DOMAIN_FAIL_HAD"
+  else domain_disable >/dev/null 2>&1 || true; fi
+  echo -e "${c_warn}! свой домен не подключён (причина выше). VPN работает как раньше, маскировка: ${DOMAIN_FAIL_SNI:-?}${c_no}" >&2
+  exit "$rc"
+}
 cmd_domain(){ # vpn-setup domain ДОМЕН | off | (без аргумента — состояние)
+  local env_tpl="${SITE_TEMPLATE:-}"
   require_installed; load_config
-  local arg="${1:-}" d
+  [ -n "$env_tpl" ] && SITE_TEMPLATE="$env_tpl"
+  local arg="${1:-}" d had=""
   write_helpers
   PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip || true)}
   [ -n "$PUBLIC_IP" ] || die "не удалось определить внешний IPv4. Задай: PUBLIC_IP=x.x.x.x vpn-setup domain …"
@@ -2657,6 +3142,7 @@ cmd_domain(){ # vpn-setup domain ДОМЕН | off | (без аргумента �
       SNI=$(choose_sni "${BORROWED_SNI:-}") || exit 1
       SET_SNI="$SNI" run_provision
       domain_disable
+      rm -f /etc/cron.d/vpn-setup-certbot
       DOMAIN=""; DOMAIN_PORT=""; echo "$SNI" > "$STATE/sni"
       save_config; publish_links
       warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
@@ -2664,13 +3150,22 @@ cmd_domain(){ # vpn-setup domain ДОМЕН | off | (без аргумента �
     *)
       d=$(domain_normalize "$arg") || die "некорректное имя домена: $arg"
       step "Свой домен для Reality: $d"
-      [ -n "${DOMAIN:-}" ] || BORROWED_SNI="${SNI:-}"
+      had="${DOMAIN:-}"
+      [ -n "$had" ] || BORROWED_SNI="${SNI:-}"
+      domain_name_check "$d"; domain_dns_check "$d" "$PUBLIC_IP"   # до любых изменений на сервере
       firewall_apply "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" 80
+      # если сайт не поднялся (любая ошибка → exit) — убрать наши следы (nginx-конфиг, порт 80); VPN остаётся как был
+      DOMAIN_FAIL_SNI="${SNI:-?}" DOMAIN_FAIL_HAD="$had"
+      trap 'domain_fail_cleanup' EXIT
       domain_setup "$d" "$PUBLIC_IP"
+      ensure_cert_renewal
       SET_SNI="$d" REALITY_TARGET="127.0.0.1:$DOMAIN_PORT" run_provision
+      trap - EXIT
       DOMAIN="$d"; SNI="$d"; echo "$SNI" > "$STATE/sni"
       save_config; publish_links
-      warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
+      if [ "${VPN_SETUP_QUIET_LINKS:-0}" != 1 ]; then
+        warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
+      fi
       echo "Сайт можно заменить своими файлами: $DOMAIN_WWW_ROOT/$d (vpn-setup его не перезапишет)."
       ;;
   esac
@@ -2683,8 +3178,10 @@ cmd_install(){
   . /etc/os-release
   [ "${ID:-}" = ubuntu ] || die "поддерживается только Ubuntu 22.04/24.04/26.04 (обнаружено: ${PRETTY_NAME:-?})"
   case "${VERSION_ID:-}" in 22.04|24.04|26.04) ;; *) warn "Ubuntu ${VERSION_ID:-?} не проверялась — продолжаю на свой риск";; esac
-  local ENV_SNI="${SNI:-}" ENV_USERS="${USERS:-}" ENV_COUNTRY_IN="${COUNTRY:-}" ENV_DOMAIN="${DOMAIN:-}"
+  local ENV_SNI="${SNI:-}" ENV_USERS="${USERS:-}" ENV_COUNTRY_IN="${COUNTRY:-}" ENV_DOMAIN="${DOMAIN:-}" ENV_TPL="${SITE_TEMPLATE:-}"
+  local FRESH=0; is_installed || FRESH=1
   load_config
+  [ -n "$ENV_TPL" ] && SITE_TEMPLATE="$ENV_TPL"
   if [ -n "$ENV_USERS" ]; then  # объединяем с уже существующими — старых не теряем
     USERS=$(printf '%s\n' ${USERS:-} $ENV_USERS | awk 'NF && !seen[$0]++' | xargs)
   fi
@@ -2807,25 +3304,49 @@ EOF
   [ -n "${COUNTRY:-}" ] || COUNTRY=$(detect_country)
   echo "IP сервера: $PUBLIC_IP, страна: ${COUNTRY:-не определена} $(flag_of "${COUNTRY:-}")"
   write_helpers
-  local OLD_SNI="${SNI:-}" SNI_CHANGED=0
+  local OLD_SNI="${SNI:-}" SNI_CHANGED=0 NEW_DOMAIN="" DOMAIN_NOTE="" ans=""
+  # свой домен: новый — проверяем сразу, а подключаем в конце (если не выйдет — установка всё равно завершится)
   if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != off ]; then
-    ENV_DOMAIN=$(domain_normalize "$ENV_DOMAIN") || die "некорректное имя домена в DOMAIN="
-    [ -n "${DOMAIN:-}" ] || BORROWED_SNI="${SNI:-}"
-    DOMAIN="$ENV_DOMAIN"
+    NEW_DOMAIN=$(domain_normalize "$ENV_DOMAIN") || { DOMAIN_NOTE="некорректное имя домена: $ENV_DOMAIN"; NEW_DOMAIN=""; }
+  elif [ "$FRESH" = 1 ] && [ -z "${DOMAIN:-}" ] && [ -z "$ENV_SNI" ] && (: </dev/tty) 2>/dev/null; then
+    echo
+    echo "Свой домен — самая сильная маскировка: Reality выглядит как твой настоящий сайт на этом сервере."
+    echo "Нужна A-запись домена (или поддомена) на $PUBLIC_IP, без Cloudflare-прокси. Нет домена — Enter, включить можно позже."
+    ask ans "Свой домен для маскировки (A-запись на IP сервера уже сделана)? Enter — пропустить" ""
+    if [ -n "$ans" ]; then NEW_DOMAIN=$(domain_normalize "$ans") || { DOMAIN_NOTE="некорректное имя домена: $ans"; NEW_DOMAIN=""; }; fi
+  fi
+  if [ -n "$NEW_DOMAIN" ] && [ "$NEW_DOMAIN" = "${DOMAIN:-}" ]; then NEW_DOMAIN=""; fi   # уже включён
+  if [ -n "$NEW_DOMAIN" ]; then
+    echo "проверяю домен $NEW_DOMAIN (имя, DNS)…"
+    if run_self _domain_check "$NEW_DOMAIN" "$PUBLIC_IP"; then
+      echo "домен $NEW_DOMAIN указывает на этот сервер ✓ — подключу его в конце установки"
+      choose_site_template
+    else
+      DOMAIN_NOTE="домен $NEW_DOMAIN не прошёл проверку (причина выше)"; NEW_DOMAIN=""
+    fi
+  fi
+  if [ -n "$DOMAIN_NOTE" ]; then
+    warn "$DOMAIN_NOTE — продолжаю без своего домена. Включить позже: vpn-setup → пункт 6, или vpn-setup domain ДОМЕН"
   fi
   if [ -n "${DOMAIN:-}" ]; then
-    domain_name_check "$DOMAIN"; domain_dns_check "$DOMAIN" "$PUBLIC_IP"
     SNI="$DOMAIN"; echo "свой домен: Reality маскируется под собственный сайт $DOMAIN (выключить: vpn-setup domain off)"
   elif [ -n "$ENV_SNI" ]; then SNI=$(choose_sni "$ENV_SNI") || exit 1; [ -n "$OLD_SNI" ] && [ "$OLD_SNI" != "$SNI" ] && SNI_CHANGED=1
   elif [ -n "${SNI:-}" ]; then echo "оставляю прежний сайт (сменить: vpn-setup sni)"
-  else SNI=$(choose_sni) || exit 1; fi
+  else
+    [ -n "$NEW_DOMAIN" ] && echo "Сначала запасной (чужой) сайт маскировки — он нужен, если свой домен когда-нибудь отключишь."
+    SNI=$(choose_sni) || exit 1
+  fi
   echo "SNI: $SNI"; echo "$SNI" > "$STATE/sni"
   save_config
 
   step "6/9 Firewall и fail2ban"
   firewall_apply "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" ${DOMAIN:+80}
   fail2ban_apply
-  if [ -n "${DOMAIN:-}" ]; then domain_setup "$DOMAIN" "$PUBLIC_IP"; save_config; fi
+  if [ -n "${DOMAIN:-}" ]; then   # свой домен уже включён: обновить сайт/сертификат; сбой DNS-проверки не ломает работающий сайт
+    if run_self _domain_check "$DOMAIN" "$PUBLIC_IP" >/dev/null 2>&1; then domain_setup "$DOMAIN" "$PUBLIC_IP"
+    else warn "DNS домена $DOMAIN сейчас проверить не удалось — оставляю сайт как есть"; DOMAIN_SKIP_DNS=1 domain_setup "$DOMAIN" "$PUBLIC_IP"; fi
+    ensure_cert_renewal; save_config
+  fi
 
   step "7/9 Inbound'ы и пользователи"
   REALITY_TARGET="${DOMAIN:+127.0.0.1:${DOMAIN_PORT:-}}" run_provision
@@ -2840,9 +3361,21 @@ EOF
 
   install_cli
 
+  if [ -n "$NEW_DOMAIN" ]; then
+    step "Свой домен $NEW_DOMAIN: сайт, сертификат Let's Encrypt, Reality"
+    if SITE_TEMPLATE="${SITE_TEMPLATE:-}" VPN_SETUP_QUIET_LINKS=1 run_self domain "$NEW_DOMAIN"; then
+      load_config   # DOMAIN, DOMAIN_PORT, SNI — из config.env
+      echo "свой домен $DOMAIN подключён: Reality маскируется под твой сайт https://$DOMAIN"
+    else
+      DOMAIN_NOTE="свой домен $NEW_DOMAIN не подключён (причина выше)"
+      warn "$DOMAIN_NOTE. VPN работает, маскировка: ${SNI}. Повторить: vpn-setup → пункт 6, или vpn-setup domain $NEW_DOMAIN"
+    fi
+  fi
+
   step "9/9 Проверка"
   local rc=0
   ops_status || rc=$?
+  [ -z "$DOMAIN_NOTE" ] || rc=1
 
   cat > "$STATE/README.txt" <<EOF
 vpn-setup ${SCRIPT_VERSION}   Сервер: ${PUBLIC_IP}   SNI Reality: ${SNI}   3X-UI: ${XUI_VERSION}
@@ -2851,19 +3384,141 @@ vpn-setup ${SCRIPT_VERSION}   Сервер: ${PUBLIC_IP}   SNI Reality: ${SNI}  
 $(panel_text)
 
 Файлы: ссылки ${STATE}/links.txt   QR ${STATE}/qr/   ключи ${STATE}/keys/   бэкапы ${STATE}/backup/ (ежедневно)
-Команды: vpn-setup help    (или bash ${STATE}/install.sh help)
+Команды: vpn-setup (меню)   vpn-setup help    (или bash ${STATE}/install.sh help)
+$(if [ -n "${DOMAIN:-}" ]; then echo "Свой домен: https://${DOMAIN}  (файлы сайта: ${DOMAIN_WWW_ROOT:-/var/www}/${DOMAIN})"; fi)
+
+================ ССЫЛКИ ПОЛЬЗОВАТЕЛЕЙ (секрет! вставить в Happ / v2rayNG / Throne) ================
+$(cat "$STATE/links.txt" 2>/dev/null || echo "нет файла $STATE/links.txt")
 EOF
   chmod 600 "$STATE/README.txt"
 
+  install_summary "$rc" "$DOMAIN_NOTE"
+}
+
+install_summary(){ # install_summary RC [ЗАМЕЧАНИЕ_ПРО_ДОМЕН] — итог установки в консоль
+  local rc="$1" note="${2:-}" yn=""
   echo
+  echo "=================================================================="
   if [ "$rc" = 0 ]; then echo -e "${c_ok}ГОТОВО.${c_no}"; else echo -e "${c_warn}ГОТОВО С ЗАМЕЧАНИЯМИ — см. проверку выше.${c_no}"; fi
-  echo "Как зайти в панель (нужен SSH-туннель):  vpn-setup panel"
-  echo "Всё про сервер (логины, файлы):  cat $STATE/README.txt      Команды:  vpn-setup help"
-  echo "Скачай через SFTP папку $STATE/qr и файл $STATE/links.txt — это секреты."
+  [ -z "$note" ] || echo -e "${c_warn}! ${note}. Включить позже: vpn-setup → пункт 6, или vpn-setup domain ДОМЕН${c_no}"
+  echo
+  # пароль панели — только на экран; если вывод пишется в файл/лог, пароль не печатаем
+  if [ -t 1 ]; then panel_text; else panel_text | sed "s|${P_PASS:-__no_password__}|см. $STATE/README.txt|g"; fi
+  echo
+  echo "ССЫЛКИ ДЛЯ ПРИЛОЖЕНИЙ: $STATE/links.txt   QR-коды: $STATE/qr/   (показать: vpn-setup links)"
+  echo "Скачать всё одним файлом (панель, пароли, ссылки): MobaXterm → слева вкладка SFTP → папка $STATE → файл README.txt (и папка qr)."
+  echo "Это секреты — не пересылай их в общие чаты."
   echo "Проверь с домашнего ПК без VPN, что сервер доступен:  curl -s -o NUL -w \"%{http_code}\" http://${PUBLIC_IP}:${PORT_XHTTP}/   (ожидается 404)"
+  echo "Меню управления сервером:  vpn-setup"
   if [ ! -f /etc/ssh/sshd_config.d/00-hardening.conf ]; then
     warn "Вход по паролю ещё включён. Зайди по ключу в НОВОЙ сессии, затем выполни:  vpn-setup harden-ssh"
   fi
+  if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+    read -r -p "Показать ссылки пользователей сейчас? [y/N]: " yn </dev/tty || yn=""
+    case "$yn" in y|Y|д|Д|yes|да) ops_links ;; esac
+  fi
+  return 0
+}
+
+# ===================== меню =====================
+menu_pause(){ local _x; read -r -p "Enter — назад в меню… " _x </dev/tty || true; }
+menu_run(){ # menu_run КОМАНДА… — подкоманда отдельным процессом; Ctrl+C прерывает её, а не меню
+  local rc=0
+  echo
+  trap ':' INT
+  run_self "$@" || rc=$?
+  trap - INT
+  [ "$rc" = 0 ] || echo -e "${c_warn}(команда завершилась с ошибкой, код $rc)${c_no}"
+  return 0
+}
+menu_header(){
+  local out nf nw st="" x="" tgt
+  echo
+  echo "=================================================================="
+  if ! is_installed; then
+    echo " vpn-setup ${SCRIPT_VERSION} — VPN на этом сервере ещё НЕ настроен"
+    echo "=================================================================="
+    return 0
+  fi
+  load_config
+  x=$(/usr/local/x-ui/x-ui -v 2>/dev/null | tr -dc '0-9.\n' | sed -n 1p) || true
+  if [ -n "${DOMAIN:-}" ]; then tgt="свой домен ${DOMAIN}"; else tgt="сайт ${SNI:-?}"; fi
+  echo " vpn-setup ${SCRIPT_VERSION} · 3X-UI ${x:-?} · $(flag_of "${COUNTRY:-}") ${PUBLIC_IP:-?}"
+  echo " Пользователей: $(wc -w <<<"${USERS:-}") · маскировка Reality: ${tgt}"
+  printf ' Состояние: проверяю…\r'
+  out=$(run_self status 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
+  nf=$(grep -c '^  ✗' <<<"$out") || nf=0
+  nw=$(grep -c '^  !' <<<"$out") || nw=0
+  if [ "$nf" = 0 ] && [ "$nw" = 0 ]; then st="${c_ok}✓ всё в порядке${c_no}"
+  elif [ "$nf" = 0 ]; then st="${c_warn}! замечаний: $nw${c_no} (пункт 2)"
+  else st="${c_err}✗ проблем: $nf${c_no}, замечаний: $nw (пункт 2)"; fi
+  echo -e " Состояние: ${st}            "
+  echo "=================================================================="
+}
+menu_main(){ # интерактивное меню (как у x-ui); выход — 0
+  local c="" v=""
+  while true; do
+    menu_header
+    if ! is_installed; then
+      cat <<'MENU'
+  1) Установить VPN
+  2) Проверить IP до установки (не режет ли провайдер)
+  3) Справка по командам
+  0) Выход
+MENU
+      read -r -p "Выбери пункт: " c </dev/tty || return 0
+      case "$c" in
+        1) menu_run install; menu_pause ;;
+        2) menu_run precheck; menu_pause ;;
+        3) ops_help; menu_pause ;;
+        0|q|exit|"") return 0 ;;
+        *) echo "нет такого пункта" ;;
+      esac
+      continue
+    fi
+    cat <<'MENU'
+  1) Обновить скрипт (с GitHub)          7) Сайт-заглушка своего домена
+  2) Состояние сервера                   8) Чужой сайт маскировки Reality
+  3) Ссылки и QR-коды                    9) Отключить вход по паролю (SSH)
+  4) Вход в панель 3X-UI (SSH-туннель)  10) Бэкап сейчас
+  5) Добавить пользователей             11) Повторить установку / проверку
+  6) Свой домен                         12) Удалить VPN
+  0) Выход
+MENU
+    read -r -p "Выбери пункт: " c </dev/tty || return 0
+    case "$c" in
+      1) menu_run update && { [ -f "$STATE/install.sh" ] && exec bash "$STATE/install.sh"; }; menu_pause ;;
+      2) menu_run status; menu_pause ;;
+      3) v=""; read -r -p "Имя пользователя (Enter — все): " v </dev/tty || v=""
+         menu_run links "$v"; menu_pause ;;
+      4) menu_run panel; menu_pause ;;
+      5) v=""; read -r -p "Новые имена латиницей через пробел (Enter — отмена): " v </dev/tty || v=""
+         if [ -n "${v// /}" ]; then
+           if [[ "$v" =~ ^[A-Za-z0-9_\ -]+$ ]]; then USERS="$v" menu_run install
+           else echo "имена — только латиница, цифры, _ и -"; fi
+         fi
+         menu_pause ;;
+      6) menu_run domain
+         v=""; read -r -p "Домен или поддомен (off — выключить, Enter — назад): " v </dev/tty || v=""
+         if [ "$v" = off ]; then menu_run domain off
+         elif [ -n "$v" ]; then
+           SITE_TEMPLATE=""; choose_site_template
+           SITE_TEMPLATE="${SITE_TEMPLATE:-}" menu_run domain "$v"; SITE_TEMPLATE=""
+         fi
+         menu_pause ;;
+      7) load_config
+         if [ -z "${DOMAIN:-}" ]; then echo "Сначала включи свой домен (пункт 6) — сайт-заглушка бывает только на своём домене."
+         else menu_run site; fi
+         menu_pause ;;
+      8) menu_run sni; menu_pause ;;
+      9) menu_run harden-ssh; menu_pause ;;
+      10) menu_run backup; menu_pause ;;
+      11) menu_run install; menu_pause ;;
+      12) menu_run uninstall; menu_pause ;;
+      0|q|exit|"") return 0 ;;
+      *) echo "нет такого пункта" ;;
+    esac
+  done
 }
 
 # ===================== запуск =====================
@@ -2886,8 +3541,18 @@ if [ -f "$0" ] && [ "$(id -u)" = 0 ] && [ "$(readlink -f "$0")" != "$(readlink -
   install -d -m 700 "$STATE"; install -m 700 "$0" "$STATE/install.sh"
 fi
 
+# без аргументов в терминале — меню; с переменными USERS/SNI/DOMAIN/… или без терминала — сразу установка
+if [ $# = 0 ] && [ "${VPN_SETUP_MENU:-1}" != 0 ] && [ -t 0 ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null \
+   && [ -z "${USERS:-}${SNI:-}${DOMAIN:-}${COUNTRY:-}${SSH_PUBKEY:-}${SITE_TEMPLATE:-}" ] && [ -n "$(self_path)" ]; then
+  menu_main; exit 0
+fi
+
 case "${1:-install}" in
   install)      cmd_install ;;
+  _domain_check) domain_name_check "${2:?}"; domain_dns_check "${2:?}" "${3:?}" ;;
+  site)         [ "$(id -u)" = 0 ] || die "нужен root"
+                if declare -F cmd_site >/dev/null; then cmd_site "${2:-}"; else die "команда site появится вместе с модулем шаблонов сайтов"; fi ;;
+  menu)         menu_main ;;
   harden-ssh)   [ "$(id -u)" = 0 ] || die "нужен root"; harden_ssh ;;
   sni)          [ "$(id -u)" = 0 ] || die "нужен root"; cmd_sni "${2:-}" ;;
   domain)       [ "$(id -u)" = 0 ] || die "нужен root"; cmd_domain "${2:-}" ;;

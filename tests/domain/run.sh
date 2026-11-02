@@ -68,14 +68,87 @@ OUT=$(mod domain_is_cloudflare 89.125.250.179 || echo N); check "cf: обычн�
 OUT=$(DOMAIN_PORT=9555 mod domain_pick_port); check "port: сохранённый DOMAIN_PORT" [ "$OUT" = 9555 ]
 OUT=$(mod domain_pick_port); check "port: свободный из 9443..9499" bash -c '[ "$1" -ge 9443 ] && [ "$1" -le 9499 ]' _ "$OUT"
 
-# ---------------- сайт-заглушка ----------------
+# ---------------- сайты-маски (шаблоны lib/sites) ----------------
+export DOMAIN_CRON_FILE="$T/cron.d-vpn-setup-site"
+FX="$T/fx"; mkdir -p "$FX"
+python3 - "$FX" <<'PY'
+import json, sys, datetime as dt
+fx = sys.argv[1]
+r = {"USD":1,"EUR":0.92,"GBP":0.78,"CNY":7.1,"JPY":151.0,"CHF":0.88,"TRY":34.2,"KZT":492.0,"BYN":3.27,"RUB":96.5,"PLN":3.98,"AED":3.67}
+json.dump({"result":"success","time_last_update_unix":1700000000,"rates":r}, open(fx+"/er.json","w"))
+json.dump({"result":"error"}, open(fx+"/bad.json","w"))
+t = dt.date.today()
+for b in range(1, 31):
+    d = t - dt.timedelta(days=b)
+    v = {c: {"Nominal": 1, "Value": 96.5 / x} for c, x in r.items() if c != "RUB"}
+    json.dump({"Valute": v}, open(f"{fx}/cbr-{d.year}-{d.month:02d}-{d.day:02d}.json", "w"))
+PY
+export RATES_URL="file://$FX/er.json" SEED_URL="file://$FX/cbr-{y}-{m}-{d}.json"
+W="$T/www/lenafoto.net"
+OUT=$(mod domain_site_list); check "site list: три шаблона card/status/rates" bash -c '[ "$(cut -d"|" -f1 <<<"$1" | tr "\n" " ")" = "card status rates " ]' _ "$OUT"
+OUT=$(mod domain_site_deploy lenafoto.net bogus); check "site: неизвестный шаблон → отказ" has "$OUT" "DIE нет такого шаблона"
 OUT=$(mod domain_decoy lenafoto.net)
-check "decoy: создан index/about/notes/404/robots/sitemap/favicon" bash -c 'for f in index.html about.html notes/expired-film.html 404.html robots.txt sitemap.xml favicon.svg style.css; do [ -s "$1/$f" ] || exit 1; done' _ "$T/www/lenafoto.net"
-check "decoy: не страница nginx по умолчанию, заголовок из имени" grep -q '<title>Lenafoto' "$T/www/lenafoto.net/index.html"
-check "decoy: даты изменения в прошлом (>20 дней)" bash -c '[ $(( $(date +%s) - $(stat -c %Y "$1") )) -gt 1728000 ]' _ "$T/www/lenafoto.net/index.html"
-check "decoy: в тексте нет слов vpn/proxy/xray" bash -c '! grep -rqiE "vpn|proxy|xray|reality" "$1"' _ "$T/www/lenafoto.net"
-echo "my own site" > "$T/www/lenafoto.net/index.html"
-OUT=$(mod domain_decoy lenafoto.net); check "decoy: свой сайт пользователя не перезаписывается" grep -qx "my own site" "$T/www/lenafoto.net/index.html"
+check "card: index/work/404/robots/sitemap/favicon/style" bash -c 'for f in index.html work.html 404.html robots.txt sitemap.xml favicon.svg style.css; do [ -s "$1/$f" ] || exit 1; done' _ "$W"
+check "card: маркер «card ХЭШ» + манифест" bash -c 'head -1 "$1/.vpn-setup-site" | grep -qE "^card [0-9a-f]{16}$" && grep -qx index.html "$1/.vpn-setup-site"' _ "$W"
+check "card: .net → английский" grep -q '<html lang="en">' "$W/index.html"
+check "card: незаменённых {{…}} нет" bash -c '! grep -rq "{{" "$1"' _ "$W"
+check "card: почта на основном домене" grep -q 'mailto:[a-z]*@lenafoto.net' "$W/index.html"
+check "card: даты изменения в прошлом (>10 дней)" bash -c '[ $(( $(date +%s) - $(stat -c %Y "$1") )) -gt 864000 ]' _ "$W/index.html"
+check "card: нет слов vpn/proxy/xray/reality" bash -c '! grep -rqiE "vpn|proxy|xray|reality|x-ui" "$1" --exclude=.vpn-setup-site' _ "$W"
+check "card: нет внешних ресурсов (src/href на http)" bash -c '! grep -rqE "(src|href)=\"https?://" "$1"' _ "$W"
+check "card: cron не ставится" [ ! -e "$DOMAIN_CRON_FILE" ]
+OUT=$(mod domain_site_deploy lenafoto.net card); check "card: повторный запуск — без пересборки" has "$OUT" "уже стоит"
+cp "$W/index.html" "$T/i1"; rm -rf "$T/www/other.net"; mod domain_site_deploy other.net card >/dev/null
+check "card: другой домен — другой сайт (имя/цвет)" bash -c '! cmp -s "$1" "$2"' _ "$T/i1" "$T/www/other.net/index.html"
+OUT=$(mod domain_site_deploy shop.example.ru card); check "card: .ru → русский" grep -q '<html lang="ru">' "$T/www/shop.example.ru/index.html"
+check "card: почта не на поддомене" grep -q '@example.ru' "$T/www/shop.example.ru/index.html"
+echo "extra" > "$W/my-note.txt"
+OUT=$(mod domain_site_deploy lenafoto.net status)
+check "status: сайт заменён (history.html), старые файлы card удалены" bash -c '[ -s "$1/history.html" ] && [ ! -e "$1/work.html" ] && head -1 "$1/.vpn-setup-site" | grep -q "^status "' _ "$W"
+check "status: чужой файл пользователя сохранён" [ -f "$W/my-note.txt" ]
+check "status: status.json с цифрами, без IP" python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert {"updated","uptime_s","load","cpus","mem_pct","disk_pct","days"} <= set(s); assert "." not in "".join(str(x) for x in [s.get("ip","")])' "$W/data/status.json"
+check "status: cron каждую минуту запускает collect.py" grep -qE '^\* \* \* \* \* root .*collect\.py .*/lenafoto\.net/data' "$DOMAIN_CRON_FILE"
+check "status: collect.py лежит в STATE/site" [ -f "$T/state/site/collect.py" ]
+python3 -I "$T/state/site/collect.py" "$W/data"
+check "status: история по дням копится" python3 -c 'import json,sys; h=json.load(open(sys.argv[1])); assert sum(h["days"].values())>=2' "$W/data/status-history.json"
+OUT=$(mod domain_site_deploy lenafoto.net rates)
+check "rates: rates.json валидный (12 валют, история 30 дн.)" python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert len(j["usd"])==12 and len(j["hist"])>=15' "$W/data/rates.json"
+check "rates: данные status удалены при смене" [ ! -e "$W/data/status.json" ]
+check "rates: cron раз в час (fetch.py), status-cron заменён" bash -c 'grep -qE "^[0-9]+ \* \* \* \* root .*fetch\.py" "$1" && ! grep -q collect.py "$1"' _ "$DOMAIN_CRON_FILE"
+cp "$W/data/rates.json" "$T/r1"
+OUT=$(RATES_URL="file://$FX/bad.json" python3 -I "$T/state/site/fetch.py" "$W/data" 2>&1); rc=$?
+check "rates: плохой ответ API → код 1, старый файл цел" bash -c '[ "$1" = 1 ] && cmp -s "$2" "$3"' _ "$rc" "$T/r1" "$W/data/rates.json"
+OUT=$(RATES_URL="file://$FX/nope.json" python3 -I "$T/state/site/fetch.py" "$W/data" 2>&1); rc=$?
+check "rates: API недоступен → код 1, старый файл цел" bash -c '[ "$1" = 1 ] && cmp -s "$2" "$3"' _ "$rc" "$T/r1" "$W/data/rates.json"
+OUT=$(mod domain_site_deploy lenafoto.net card)
+check "card снова: cron удалён, data удалена" bash -c '[ ! -e "$1" ] && [ ! -e "$2/data" ]' _ "$DOMAIN_CRON_FILE" "$W"
+mod domain_site_deploy lenafoto.net status >/dev/null
+PATH="$T/nb0:$T/stub:$PATH" mod domain_disable >/dev/null 2>&1
+check "off: cron обновления данных сайта удалён" [ ! -e "$DOMAIN_CRON_FILE" ]
+# свой сайт пользователя
+mkdir -p "$T/www/own.net"; echo "my own site" > "$T/www/own.net/index.html"
+OUT=$(mod domain_site_deploy own.net status); check "own: свой сайт не перезаписан" bash -c 'grep -qx "my own site" "$1/index.html" && [ ! -e "$1/.vpn-setup-site" ]' _ "$T/www/own.net"
+check "own: сообщение «не трогаю»" has "$OUT" "не трогаю"
+# заглушка прошлой версии (без маркера) заменяется
+mkdir -p "$T/www/old.net/notes"; echo '<footer>© 2026 Old · written slowly, published rarely</footer>' > "$T/www/old.net/index.html"; echo x > "$T/www/old.net/notes/bike-wheel.html"
+OUT=$(mod domain_site_deploy old.net card); check "legacy: старая заглушка заменена шаблоном" bash -c '[ -s "$1/work.html" ] && [ ! -d "$1/notes" ]' _ "$T/www/old.net"
+# vpn-setup site (cmd_site) — require_installed/load_config/save_config из install.sh — заглушки
+OUT=$(mod eval "require_installed(){ :; }; load_config(){ DOMAIN=lenafoto.net; SITE_TEMPLATE=rates; }; save_config(){ echo SAVED=\$SITE_TEMPLATE; }; cmd_site")
+check "cmd_site: список с отметкой текущего" has "$OUT" "* rates"
+OUT=$(mod eval "require_installed(){ :; }; load_config(){ DOMAIN=lenafoto.net; SITE_TEMPLATE=card; }; save_config(){ echo SAVED=\$SITE_TEMPLATE; }; cmd_site status")
+check "cmd_site status: развёрнут и сохранён" bash -c 'grep -q "SAVED=status" <<<"$1" && head -1 "$2/.vpn-setup-site" | grep -q "^status "' _ "$OUT" "$W"
+OUT=$(mod eval "require_installed(){ :; }; load_config(){ DOMAIN=; SITE_TEMPLATE=card; }; save_config(){ echo SAVED=\$SITE_TEMPLATE; }; cmd_site rates")
+check "cmd_site без домена: только сохраняет выбор" bash -c 'grep -q "SAVED=rates" <<<"$1" && ! grep -q "сайт: шаблон" <<<"$1"' _ "$OUT"
+OUT=$(mod eval "require_installed(){ :; }; load_config(){ DOMAIN=; }; save_config(){ :; }; cmd_site nope"); check "cmd_site: неизвестный → отказ" has "$OUT" "DIE нет такого шаблона"
+# шаблоны из собранного install.sh (base64 tar.gz) раскрываются и работают
+if [ -f "$ROOT/install.sh" ] && grep -q '^_domain_sites_payload' "$ROOT/install.sh"; then
+  awk '/^_domain_sites_payload\(\)/{f=1;next} /^SITESEOF/{f=0} f' "$ROOT/install.sh" | base64 -d | { mkdir -p "$T/built"; tar -xzf - -C "$T/built"; }
+  OUT=$(DOMAIN_SITES_SRC="$T/built" mod domain_site_deploy built.org rates)
+  check "build: вшитые шаблоны распаковываются и собираются" bash -c '[ -s "$1/index.html" ] && [ -s "$1/data/rates.json" ]' _ "$T/www/built.org"
+else
+  SKIP=$((SKIP+1)); echo "SKIP  build: install.sh не собран"
+fi
+rm -f "$DOMAIN_CRON_FILE"
 
 # ---------------- конфиг nginx (nginx-заглушка: проверка синтаксиса не нужна) ----------------
 mkdir -p "$T/nb"; printf '#!/bin/sh\ncase "$1" in -v) echo "nginx version: nginx/%s" >&2;; esac\nexit 0\n' "${FAKE_NGINX_VER:-1.24.0}" > "$T/nb/nginx"; chmod +x "$T/nb/nginx"
@@ -137,8 +210,9 @@ PY
   if nginx -c "$L/nginx.conf" -t -q 2>/dev/null && nginx -c "$L/nginx.conf" 2>/dev/null; then
     sleep 1
     OUT=$(mod domain_local_probe live.example "$PORT" && echo PROBE-OK); check "live: nginx отдаёт сайт по TLS1.3 + HTTP/2 на 127.0.0.1:$PORT" has "$OUT" PROBE-OK
-    OUT=$(curl -sk --noproxy '*' --resolve "live.example:$PORT:127.0.0.1" "https://live.example:$PORT/nope" -w '%{http_code}' -o "$T/404.html"); check "live: 404 — своя страница" bash -c '[ "$1" = 404 ] && grep -q "Not found" "$2"' _ "$OUT" "$T/404.html"
-    OUT=$(curl -sk --noproxy '*' --resolve "live.example:$PORT:127.0.0.1" "https://live.example:$PORT/about" -o /dev/null -w '%{http_code}'); check "live: /about без .html" [ "$OUT" = 200 ]
+    OUT=$(curl -sk --noproxy '*' --resolve "live.example:$PORT:127.0.0.1" "https://live.example:$PORT/nope" -w '%{http_code}' -o "$T/404.html"); check "live: 404 — своя страница" bash -c '[ "$1" = 404 ] && grep -q "404" "$2"' _ "$OUT" "$T/404.html"
+    OUT=$(curl -sk --noproxy '*' --resolve "live.example:$PORT:127.0.0.1" "https://live.example:$PORT/work" -o /dev/null -w '%{http_code}'); check "live: /work без .html" [ "$OUT" = 200 ]
+    OUT=$(curl -sk --noproxy '*' --resolve "live.example:$PORT:127.0.0.1" "https://live.example:$PORT/.vpn-setup-site" -o /dev/null -w '%{http_code}'); check "live: маркер /.vpn-setup-site скрыт (404)" [ "$OUT" = 404 ]
     OUT=$(ss -Htln "sport = :$PORT" | awk '{print $4}'); check "live: слушает только loopback" [ "$OUT" = "127.0.0.1:$PORT" ]
     nginx -c "$L/nginx.conf" -s stop 2>/dev/null
   else

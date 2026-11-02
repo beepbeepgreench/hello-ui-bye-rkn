@@ -167,6 +167,13 @@ server {
     index index.html;
     error_page 404 /404.html;
     location = /favicon.ico { log_not_found off; access_log off; try_files /favicon.ico =404; }
+    location ~ /\. { return 404; }
+    location ^~ /data/ {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        try_files \$uri =404;
+    }
     location / { try_files \$uri \$uri.html \$uri/ =404; }
 }
 EOF
@@ -179,83 +186,121 @@ EOF
   _domain_nginx_reload || die "nginx не принял конфиг (вывод nginx -t выше). Файл: $conf"
 }
 
-# ---------- сайт-заглушка ----------
-domain_decoy(){ # создаёт сайт в $DOMAIN_WWW_ROOT/ДОМЕН, если там ещё нет index.html (свой сайт не трогаем)
-  local d="$1" dir title y
+# ---------- сайт-заглушка (шаблоны lib/sites/<id>) ----------
+# Шаблоны вшиты в install.sh при сборке (build.sh → base64 tar.gz). В исходниках (тесты) берутся из lib/sites.
+DOMAIN_CRON_FILE=${DOMAIN_CRON_FILE:-/etc/cron.d/vpn-setup-site}
+DOMAIN_SITE_MARK=.vpn-setup-site
+DOMAIN_SITES_SRC=${DOMAIN_SITES_SRC:-}
+_domain_sites_payload(){ cat <<'SITESEOF'
+@@SITES@@
+SITESEOF
+}
+_domain_sites_dir(){ # печатает каталог с распакованными шаблонами (render.py, card/, status/, rates/)
+  local p dir here
+  if [ -n "$DOMAIN_SITES_SRC" ] && [ -f "$DOMAIN_SITES_SRC/render.py" ]; then echo "$DOMAIN_SITES_SRC"; return 0; fi
+  p=$(_domain_sites_payload)
+  if [ ${#p} -lt 100 ]; then   # несобранный модуль: шаблоны рядом, в lib/sites
+    here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    [ -f "$here/sites/render.py" ] || die "шаблоны сайтов не найдены ($here/sites)"
+    echo "$here/sites"; return 0
+  fi
+  dir="$STATE/site/src"
+  rm -rf "$dir"; install -d -m 700 "$dir"
+  base64 -d <<<"$p" | tar -xzf - -C "$dir" || die "не удалось распаковать шаблоны сайтов"
+  echo "$dir"
+}
+domain_site_list(){ # id|Название|описание
+  echo "card|Визитка разработчика|страница фрилансера-веб-разработчика: работы, услуги, контакты"
+  echo "status|Статус серверов|страница доступности с живыми данными этого сервера (аптайм, нагрузка, диск)"
+  echo "rates|Курсы валют|курсы и конвертер валют, обновляются каждый час с открытого источника"
+}
+_domain_site_valid(){ domain_site_list | cut -d'|' -f1 | grep -qx -- "${1:-}"; }
+_domain_site_hash(){ # хэш шаблона: при обновлении скрипта изменившийся шаблон пересобирается
+  local src="$1" id="$2"
+  (cd "$src" && find "$id" render.py -type f ! -name '*.pyc' -print0 | sort -z | xargs -0 cat) | sha256sum | cut -c1-16
+}
+_domain_site_cron(){ # _domain_site_cron ID ДОМЕН — периодическое обновление данных сайта (или удаление)
+  local id="$1" d="$2" py dir="$DOMAIN_WWW_ROOT/$2/data" m
+  py=$(command -v python3 || echo /usr/bin/python3)
+  case "$id" in
+    status) printf '# vpn-setup: данные страницы статуса %s\nSHELL=/bin/sh\n* * * * * root %s -I %s %s >/dev/null 2>&1\n' \
+              "$d" "$py" "$STATE/site/collect.py" "$dir" > "$DOMAIN_CRON_FILE" ;;
+    rates)  m=$(( $(printf '%s' "$d" | cksum | cut -d' ' -f1) % 50 + 5 ))
+            printf '# vpn-setup: курсы валют для %s (раз в час)\nSHELL=/bin/sh\n%s * * * * root %s -I %s %s >/dev/null 2>&1\n' \
+              "$d" "$m" "$py" "$STATE/site/fetch.py" "$dir" > "$DOMAIN_CRON_FILE" ;;
+    *)      rm -f "$DOMAIN_CRON_FILE"; return 0 ;;
+  esac
+  chmod 644 "$DOMAIN_CRON_FILE"
+}
+domain_site_deploy(){ # domain_site_deploy ДОМЕН [ID] — сайт из шаблона; свой сайт пользователя не трогаем
+  local d="$1" id="${2:-${SITE_TEMPLATE:-card}}" dir src hash old_id="" old_hash="" f list
+  _domain_site_valid "$id" || die "нет такого шаблона сайта: $id (варианты: $(domain_site_list | cut -d'|' -f1 | tr '\n' ' '))"
   dir="$DOMAIN_WWW_ROOT/$d"
-  if [ -f "$dir/index.html" ]; then echo "сайт: $dir уже есть — не трогаю"; return 0; fi
-  install -d -m 755 "$dir" "$dir/notes"
-  title=$(python3 -I -c 'import sys; b=sys.argv[1].split(".")[0].encode().decode("idna") if sys.argv[1].startswith("xn--") else sys.argv[1].split(".")[0]; print(" ".join(w.capitalize() for w in b.replace("_","-").split("-")))' "$d" 2>/dev/null) || title="Field Notes"
-  y=$(date +%Y)
-  cat > "$dir/style.css" <<'EOF'
-:root{--bg:#fbfaf7;--fg:#22211f;--mut:#6d6a63;--acc:#2f6f5e;--line:#e7e3da}
-@media (prefers-color-scheme:dark){:root{--bg:#171715;--fg:#e9e6df;--mut:#a29e94;--acc:#7cc2ad;--line:#2c2b27}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 Georgia,"Times New Roman",serif}
-.wrap{max-width:720px;margin:0 auto;padding:40px 20px 64px}
-header{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:28px}
-header a.brand{font-size:22px;font-weight:bold;color:var(--fg);text-decoration:none}
-nav a{color:var(--mut);margin-left:16px;text-decoration:none;font-family:system-ui,sans-serif;font-size:15px}nav a:hover{color:var(--acc)}
-h1,h2{line-height:1.25}a{color:var(--acc)}.meta{color:var(--mut);font:14px system-ui,sans-serif}
-article{margin-bottom:34px}article h2{margin:0 0 4px;font-size:22px}article h2 a{color:var(--fg);text-decoration:none}
-footer{border-top:1px solid var(--line);margin-top:40px;padding-top:14px;color:var(--mut);font:14px system-ui,sans-serif}
-EOF
-  cat > "$dir/favicon.svg" <<'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2f6f5e"/><path d="M9 22c4-1 7-5 8-12 2 5 4 9 7 11" stroke="#fbfaf7" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>
-EOF
-  _domain_page(){ # _domain_page ФАЙЛ ЗАГОЛОВОК ТЕЛО
-    cat > "$1" <<EOF
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>$2</title><meta name="description" content="Notes on film photography, long walks and small repairs.">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"></head>
-<body><div class="wrap">
-<header><a class="brand" href="/">$title</a><nav><a href="/">Notes</a><a href="/about">About</a></nav></header>
-$3
-<footer>© $y $title · written slowly, published rarely</footer>
-</div></body></html>
-EOF
-  }
-  _domain_page "$dir/index.html" "$title — notes" '
-<article><h2><a href="/notes/expired-film">Shooting expired film in winter</a></h2>
-<p class="meta">January · 6 min read</p>
-<p>Three rolls of Fomapan that expired in 2009, one cheap rangefinder and a week of grey skies. What came out, what did not, and why I now overexpose everything by two stops.</p></article>
-<article><h2><a href="/notes/bike-wheel">Truing a bicycle wheel without a stand</a></h2>
-<p class="meta">November · 4 min read</p>
-<p>Zip ties, a spoke key and patience. A small guide for the kitchen-table mechanic.</p></article>
-<article><h2><a href="/notes/river-walk">Forty kilometres along the river</a></h2>
-<p class="meta">September · 8 min read</p>
-<p>Two days, one tent, too many photos of bridges. A route that is flat, quiet and has a bakery at both ends.</p></article>'
-  _domain_page "$dir/about.html" "About — $title" '
-<h1>About</h1>
-<p>Hi. This is a small personal notebook: film photography, walking routes, and fixing things instead of throwing them away.</p>
-<p>No ads, no tracking, no newsletter. Posts appear when there is something worth writing down.</p>'
-  _domain_page "$dir/notes/expired-film.html" "Shooting expired film in winter — $title" '
-<h1>Shooting expired film in winter</h1><p class="meta">January · 6 min read</p>
-<p>Old black-and-white film loses speed and gains fog. The usual rule is one stop of extra exposure per decade; with cold storage you can be gentler.</p>
-<p>I metered for ISO 25 instead of 100, developed in Rodinal 1+50 for eleven minutes and got thin but printable negatives. Grain is heavy, contrast is soft, and the snow looks like old paper — which is exactly what I wanted.</p>'
-  _domain_page "$dir/notes/bike-wheel.html" "Truing a bicycle wheel without a stand — $title" '
-<h1>Truing a bicycle wheel without a stand</h1><p class="meta">November · 4 min read</p>
-<p>Flip the bike, fix a zip tie to the frame so its tail almost touches the rim, and spin. Where the rim touches the tie, loosen the spoke on that side and tighten the opposite one by a quarter turn.</p>
-<p>Small steps. Re-check often. Stop when it is good enough — perfect is for people with stands.</p>'
-  _domain_page "$dir/notes/river-walk.html" "Forty kilometres along the river — $title" '
-<h1>Forty kilometres along the river</h1><p class="meta">September · 8 min read</p>
-<p>The path follows the old towpath almost the whole way. Water every ten kilometres, shade until noon, and a ferry that only runs on weekends — check before you go.</p>'
-  _domain_page "$dir/404.html" "Not found — $title" '<h1>Not found</h1><p>This page does not exist (any more). Try the <a href="/">notes</a>.</p>'
-  printf 'User-agent: *\nAllow: /\nSitemap: https://%s/sitemap.xml\n' "$d" > "$dir/robots.txt"
-  {
-    echo '<?xml version="1.0" encoding="UTF-8"?>'
-    echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-    for u in "" about notes/expired-film notes/bike-wheel notes/river-walk; do echo "  <url><loc>https://$d/$u</loc></url>"; done
-    echo '</urlset>'
-  } > "$dir/sitemap.xml"
-  # «живые» даты изменения: страницы писались в прошлые месяцы, а не в момент установки
-  local f i=0
-  for f in "$dir"/notes/river-walk.html "$dir"/notes/bike-wheel.html "$dir"/about.html "$dir"/notes/expired-film.html \
-           "$dir"/404.html "$dir"/style.css "$dir"/favicon.svg "$dir"/robots.txt "$dir"/sitemap.xml "$dir"/index.html; do
-    i=$((i+1)); touch -d "@$(( $(date +%s) - (200 - i*17) * 86400 - RANDOM ))" "$f" 2>/dev/null || true
-  done
+  if [ -f "$dir/$DOMAIN_SITE_MARK" ]; then
+    read -r old_id old_hash < "$dir/$DOMAIN_SITE_MARK" || true
+  elif [ -f "$dir/index.html" ]; then
+    if grep -q 'written slowly, published rarely' "$dir/index.html" 2>/dev/null; then
+      # заглушка прошлой версии vpn-setup — заменяем её файлы
+      rm -f "$dir"/index.html "$dir"/about.html "$dir"/404.html "$dir"/style.css "$dir"/favicon.svg "$dir"/robots.txt "$dir"/sitemap.xml
+      rm -rf "$dir/notes"
+    else
+      echo "сайт: в $dir уже есть свой index.html — не трогаю (шаблон «$id» не ставлю)"
+      _domain_site_cron none "$d"
+      return 0
+    fi
+  fi
+  src=$(_domain_sites_dir)
+  hash=$(_domain_site_hash "$src" "$id")
+  if [ "$old_id" = "$id" ] && [ "$old_hash" = "$hash" ]; then
+    echo "сайт: шаблон «$id» уже стоит"
+  else
+    if [ -n "$old_id" ]; then   # удаляем только файлы прошлого шаблона по манифесту; чужие файлы остаются
+      list=$(tail -n +2 "$dir/$DOMAIN_SITE_MARK")
+      while IFS= read -r f; do
+        case "$f" in ""|*..*|/*) continue ;; esac
+        rm -f "$dir/$f"
+      done <<<"$list"
+      rm -rf "$dir/data"
+    fi
+    install -d -m 755 "$dir"
+    list=$(python3 -I "$src/render.py" "$id" "$src" "$dir" "$d") || die "не удалось собрать сайт из шаблона «$id»"
+    { echo "$id $hash"; echo "$list"; } > "$dir/$DOMAIN_SITE_MARK"
+    chmod 644 "$dir/$DOMAIN_SITE_MARK"
+    echo "сайт: шаблон «$id» → $dir"
+  fi
+  install -d -m 700 "$STATE/site"
+  case "$id" in
+    status) install -m 600 "$src/status/collect.py" "$STATE/site/collect.py"
+            python3 -I "$STATE/site/collect.py" "$dir/data" || warn "сбор данных для страницы статуса не удался" ;;
+    rates)  install -m 600 "$src/rates/fetch.py" "$STATE/site/fetch.py"
+            [ -s "$dir/data/rates.json" ] || python3 -I "$STATE/site/fetch.py" "$dir/data" \
+              || warn "курсы пока не загрузились — сайт покажет «загружаются», cron повторит через час" ;;
+  esac
+  _domain_site_cron "$id" "$d"
+  [ -d "$dir/data" ] && chmod 755 "$dir/data"
   chmod -R a+rX "$dir"
-  echo "сайт-заглушка: $dir (можно заменить своими файлами — vpn-setup его больше не перезапишет)"
+  return 0
+}
+domain_decoy(){ domain_site_deploy "$1" "${SITE_TEMPLATE:-card}"; }   # совместимость
+cmd_site(){ # vpn-setup site [ID] — показать / сменить шаблон сайта-маски
+  local id="${1:-}" cur line t desc
+  require_installed; load_config
+  cur=${SITE_TEMPLATE:-card}
+  if [ -z "$id" ]; then
+    echo "Шаблоны сайта-маски (используется в режиме своего домена):"
+    while IFS='|' read -r line t desc; do
+      if [ "$line" = "$cur" ]; then printf '  * %-7s %s — %s  (текущий)\n' "$line" "$t" "$desc"
+      else printf '    %-7s %s — %s\n' "$line" "$t" "$desc"; fi
+    done < <(domain_site_list)
+    echo "Сменить: vpn-setup site ID     Свой сайт: положи файлы в /var/www/ДОМЕН (шаблон его не перезапишет)"
+    [ -n "${DOMAIN:-}" ] || echo "Сейчас домен не подключён — шаблон будет использован после: vpn-setup domain ДОМЕН"
+    return 0
+  fi
+  _domain_site_valid "$id" || die "нет такого шаблона: $id. Список: vpn-setup site"
+  SITE_TEMPLATE="$id"
+  if [ -n "${DOMAIN:-}" ]; then domain_site_deploy "$DOMAIN" "$id"; fi
+  save_config
+  echo "шаблон сайта: $id"
 }
 
 # ---------- сертификат ----------
@@ -308,7 +353,7 @@ domain_setup(){ # domain_setup ДОМЕН IP — nginx + сайт + сертиф
     [ "$rc" = 0 ] || die "apt: не удалось поставить nginx/certbot"
   fi
   DOMAIN_PORT=$(domain_pick_port)   # сохранённый порт переиспользуется (DOMAIN_PORT из config.env)
-  domain_decoy "$d"
+  domain_site_deploy "$d" "${SITE_TEMPLATE:-card}"
   domain_write_nginx "$d" "$DOMAIN_PORT" http
   domain_cert "$d"
   domain_write_nginx "$d" "$DOMAIN_PORT" full
@@ -326,6 +371,7 @@ domain_local_probe(){ # domain_local_probe ДОМЕН ПОРТ — TLS1.3 + h2 +
 domain_disable(){ # убрать наш сайт из nginx (сертификат и файлы сайта остаются), закрыть :80
   local conf="$DOMAIN_NGINX_DIR/sites-available/$DOMAIN_CONF_NAME"
   rm -f "$DOMAIN_NGINX_DIR/sites-enabled/$DOMAIN_CONF_NAME" "$conf" "$DOMAIN_HOOK"
+  rm -f "$DOMAIN_CRON_FILE"   # обновление данных сайта (статус/курсы) больше не нужно
   if [ -f "$STATE/domain.nginx-installed" ]; then
     systemctl disable --now nginx >/dev/null 2>&1 || true
     rm -f "$STATE/domain.nginx-installed"

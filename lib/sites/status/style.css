@@ -1,0 +1,52 @@
+:root{--bg:#ffffff;--soft:#f2f4f6;--ink:#1d232b;--mut:#64707d;--line:#e3e7eb;--ok:#1f8a52;--warn:#c27c0e;--bad:#c4402f;--none:#d5dbe1;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1316;--soft:#171c20;--ink:#e6eaee;--mut:#8d98a3;--line:#252c32;--ok:#3cc47c;--warn:#e3a63c;--bad:#ef6b59;--none:#2c343b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 var(--font);-webkit-font-smoothing:antialiased}
+a{color:var(--ink)}
+a:focus-visible{outline:2px solid var(--ok);outline-offset:3px}
+.wrap{max-width:860px;margin:0 auto;padding:0 20px}
+.top{display:flex;justify-content:space-between;align-items:center;padding:26px 0 30px;gap:16px;flex-wrap:wrap}
+.brand{font-weight:700;font-size:19px;text-decoration:none;letter-spacing:-.01em}
+nav{display:flex;gap:6px}
+nav a{text-decoration:none;color:var(--mut);padding:6px 12px;border-radius:8px;font-size:15px}
+nav a[aria-current]{background:var(--soft);color:var(--ink)}
+.state{display:flex;gap:18px;align-items:center;padding:26px 28px;border-radius:14px;background:var(--soft);margin-bottom:40px}
+.state h1{margin:0;font-size:clamp(22px,3.2vw,30px);letter-spacing:-.015em;line-height:1.2}
+.when{margin:4px 0 0;color:var(--mut);font-size:14px}
+.dot{flex:none;width:18px;height:18px;border-radius:50%;background:var(--none);position:relative}
+.state[data-s=ok] .dot{background:var(--ok)}
+.state[data-s=warn] .dot{background:var(--warn)}
+.state[data-s=ok] .dot::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--ok);opacity:0;animation:ping 2.6s ease-out infinite}
+@keyframes ping{0%{transform:scale(.6);opacity:.7}100%{transform:scale(1.5);opacity:0}}
+@media (prefers-reduced-motion:reduce){.state .dot::after{animation:none}}
+h2{font-size:17px;margin:0 0 16px;font-weight:650}
+.hn{color:var(--mut);font-weight:500;margin-left:6px}
+.host{margin-bottom:44px}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.metrics>div{padding:18px 20px;border-right:1px solid var(--line)}
+.metrics>div:last-child{border-right:0}
+.metrics dt{color:var(--mut);font-size:14px}
+.metrics dd{margin:4px 0 8px;font-size:26px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.metrics small{color:var(--mut);font-size:13px}
+.meter{display:block;height:6px;border-radius:3px;background:var(--soft);overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--ok);border-radius:3px;transition:width .6s ease}
+.meter i.hi{background:var(--warn)}
+.days-head{display:flex;justify-content:space-between;align-items:baseline;gap:4px 12px;flex-wrap:wrap}.days-head h2{margin-bottom:12px}
+.days-head span{color:var(--mut);font-size:14px;font-variant-numeric:tabular-nums}
+.bars{display:flex;gap:3px;height:44px;align-items:stretch}
+.bars i{flex:1;border-radius:3px;background:var(--none);min-width:2px}
+.bars i.ok{background:var(--ok)}.bars i.warn{background:var(--warn)}.bars i.bad{background:var(--bad)}
+.bars i:hover{opacity:.7}
+.axis{display:flex;justify-content:space-between;color:var(--mut);font-size:13px;margin-top:8px}
+.about{color:var(--mut);font-size:14px;margin:40px 0 0;max-width:62ch}
+.page-h{font-size:clamp(26px,4vw,34px);letter-spacing:-.02em;margin:0 0 8px}
+.lead{color:var(--mut);margin:0 0 30px}
+.log{list-style:none;margin:0;padding:0;border-left:2px solid var(--line)}
+.log li{position:relative;padding:0 0 28px 24px}
+.log li::before{content:"";position:absolute;left:-7px;top:6px;width:12px;height:12px;border-radius:50%;background:var(--bg);border:2px solid var(--ok)}
+.log time{color:var(--mut);font-size:14px;font-variant-numeric:tabular-nums}
+.log h3{margin:2px 0 4px;font-size:18px}
+.log p{margin:0;color:var(--mut);max-width:62ch}
+footer{color:var(--mut);font-size:13px;padding:48px 0 32px}
+@media (max-width:640px){.metrics{grid-template-columns:1fr 1fr}.metrics>div:nth-child(2){border-right:0}.metrics>div:nth-child(-n+2){border-bottom:1px solid var(--line)}.state{padding:20px}.bars{gap:2px;height:36px}.bars i:nth-child(-n+30){display:none}}
