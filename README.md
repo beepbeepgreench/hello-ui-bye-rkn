@@ -8,25 +8,34 @@
 | **Sudoku-VLESSenc** (VLESS Encryption + FinalMask Sudoku) | 8443/tcp | Провайдер режет по SNI: TLS и SNI нет, поток замаскирован |
 | **XHTTP-VLESSenc** (VLESS Encryption + XHTTP) | 8080/tcp | Запасной: HTTP-запросы с зашифрованным содержимым |
 
-## Перед установкой: проверь, что IP сервера не заблокирован
+## Новый сервер: 3 шага (5 минут до решения «ставить или нет»)
 
-С домашнего ПК **без VPN** (PowerShell):
+Все проверки — **с домашнего ПК с выключенным VPN**, в MobaXterm → Start local terminal. Скачай туда `check-server.sh`.
 
-```powershell
-curl.exe -s --max-time 5 telnet://IP_СЕРВЕРА:22
-```
+1. **SSH.** `bash check-server.sh IP_СЕРВЕРА` — скрипт сам проверит SSH.
+   - «SSH-данные не доходят» → **стоп**, этот IP твой провайдер режет. Дальше не пробуй: другой IP/локация/хостер.
+2. **Данные.** Зайди на сервер (MobaXterm root+пароль или веб-консоль хостера) и запусти:
+   ```bash
+   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.1/install.sh) precheck
+   ```
+   Вернись в `check-server.sh` и нажми Enter.
+   - «IP рабочий» → шаг 3. Иначе → **стоп**. SSH может проходить, а VPN-трафик резаться — поэтому шаг 2 обязателен.
+3. **Установка** (там же на сервере):
+   ```bash
+   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.1/install.sh)
+   ```
 
-Должна прийти строка `SSH-2.0-OpenSSH…`. Если пусто — провайдер режет этот IP, никакой профиль не поможет: попроси у хостера другой IP или возьми сервер у другого хостера.
+Совет: бери серверы с почасовой оплатой или тестовым периодом — не прошёл шаг 1–2, удалил за копейки.
 
 ## Установка
 
 На **чистом** сервере Ubuntu 22.04 / 24.04 / 26.04 (amd64 или arm64), от root:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.0/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.1/install.sh)
 ```
 
-Ссылка ведёт на **зафиксированный релиз** `v1.0.0` — содержимое по ней не меняется.
+Ссылка ведёт на **зафиксированный релиз** `v1.0.1` — содержимое по ней не меняется.
 
 Скрипт спросит:
 1. Имена пользователей (латиница).

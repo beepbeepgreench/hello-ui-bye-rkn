@@ -99,6 +99,30 @@ choose_sni(){ # choose_sni [ЯВНЫЙ_ДОМЕН] — печатает выбр
 }
 
 # ===================== подкоманды =====================
+cmd_precheck(){ # проверка ДО установки: доходят ли данные с домашнего ПК до этого IP
+  [ "$(id -u)" = 0 ] || die "нужен root"
+  local port="${1:-8080}" dir ip opened=0 busy
+  [[ "$port" =~ ^[0-9]+$ ]] || die "порт должен быть числом"
+  busy=$(ss -Htln "sport = :$port" 2>/dev/null) || true
+  [ -z "$busy" ] || die "порт $port занят — укажи другой: bash install.sh precheck 8090"
+  dir=$(mktemp -d); head -c 300000 /dev/urandom > "$dir/f.bin"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -c '^Status: active' >/dev/null; then
+    ufw allow "$port/tcp" comment 'vpn-setup precheck' >/dev/null && opened=1
+  fi
+  ip=$(detect_public_ip || true)
+  echo -e "${c_ok}Тестовый сервер запущен на 3 минуты (порт $port).${c_no}"
+  echo "С ДОМАШНЕГО ПК, VPN ВЫКЛЮЧЕН, выполни (MobaXterm → local terminal):"
+  echo "   bash check-server.sh ${ip:-IP_СЕРВЕРА} $port"
+  echo "или вручную:"
+  echo "   curl -s -o /dev/null --max-time 20 -w \"bytes=%{size_download}\\n\" http://${ip:-IP_СЕРВЕРА}:$port/f.bin"
+  echo "Ожидается bytes=300000. Ниже будут видны пришедшие запросы. Остановить раньше: Ctrl+C"
+  ( cd "$dir" && timeout 180 python3 -m http.server "$port" --bind 0.0.0.0 ) || true
+  rm -rf "$dir"
+  [ "$opened" = 1 ] && { ufw delete allow "$port/tcp" >/dev/null 2>&1 || true; }
+  echo "Тестовый сервер остановлен$([ "$opened" = 1 ] && echo ', порт закрыт')."
+  echo "Если на ПК было bytes=300000 — ставь:  bash install.sh   Если 0 — этот IP твой провайдер режет, ставить бессмысленно."
+}
+
 cmd_sni(){
   require_installed; load_config
   local new="${1:-}"
@@ -286,7 +310,10 @@ EOF
 # (нужно для ежедневного бэкапа по cron и последующих команд).
 if [ "$(id -u)" = 0 ] && [ ! -f "$0" ] && [ -z "${VPN_SETUP_REEXEC:-}" ] && [ "${SELF_URL#@@}" = "$SELF_URL" ]; then
   install -d -m 700 "$STATE"
-  if curl -fsSL --retry 3 --connect-timeout 15 -o "$STATE/install.sh.new" "$SELF_URL" && bash -n "$STATE/install.sh.new" \
+  # сначала ссылка на тег версии; если тега ещё нет — та же версия из main
+  if { curl -fsSL --retry 2 --connect-timeout 15 -o "$STATE/install.sh.new" "$SELF_URL" 2>/dev/null \
+       || curl -fsSL --retry 2 --connect-timeout 15 -o "$STATE/install.sh.new" "${SELF_URL%/*/install.sh}/main/install.sh"; } \
+     && bash -n "$STATE/install.sh.new" \
      && grep -c "^SCRIPT_VERSION=\"${SCRIPT_VERSION}\"$" "$STATE/install.sh.new" >/dev/null; then
     mv "$STATE/install.sh.new" "$STATE/install.sh"; chmod 700 "$STATE/install.sh"
     VPN_SETUP_REEXEC=1 exec bash "$STATE/install.sh" "$@"
@@ -302,6 +329,7 @@ case "${1:-install}" in
   install)      cmd_install ;;
   harden-ssh)   [ "$(id -u)" = 0 ] || die "нужен root"; harden_ssh ;;
   sni)          [ "$(id -u)" = 0 ] || die "нужен root"; cmd_sni "${2:-}" ;;
+  precheck)     cmd_precheck "${2:-}" ;;
   status)       require_installed; load_config; ops_status || exit 1 ;;
   links)        require_installed; load_config; ops_links "${2:-}" ;;
   backup)       require_installed; load_config; ops_backup "${2:-}" ;;

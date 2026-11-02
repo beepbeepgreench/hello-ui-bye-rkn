@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# vpn-setup v1.0.0 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
+# vpn-setup v1.0.1 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
 # Ubuntu 22.04 / 24.04 / 26.04, amd64/arm64, запуск от root, на ЧИСТОМ сервере.
 #
-#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.0/install.sh)
+#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.1/install.sh)
 #   Потом:       bash /root/vpn-setup/install.sh help
 #
 # Переменные (необязательно, иначе спросит): USERS, SSH_PUBKEY, SNI, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
 set -Eeuo pipefail
 
-SCRIPT_VERSION="v1.0.0"
-SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.0/install.sh"
+SCRIPT_VERSION="v1.0.1"
+SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.1/install.sh"
 XUI_VERSION="v3.8.5"   # закреплено: проверено с Xray 26.9.9 (Reality-XHTTP, Sudoku, VLESS-enc)
 declare -A XUI_SHA256=(
   [amd64]="6a85c110a04a727613c933c54ae602b8d37dab8876c6e20a6d46623010dd9d3c"
@@ -828,6 +828,8 @@ vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
 Использование:  bash install.sh [команда]
 
+  precheck [ПОРТ]   ДО установки: проверить, доходят ли данные с домашнего ПК до этого IP
+                    (на ПК в это время: bash check-server.sh IP ПОРТ)
   (без команды)     установка или обновление; повторный запуск безопасен,
                     новые имена из USERS добавляются, старые ссылки не меняются
   harden-ssh        отключить вход по паролю (только после проверки входа по ключу!)
@@ -1769,6 +1771,30 @@ choose_sni(){ # choose_sni [ЯВНЫЙ_ДОМЕН] — печатает выбр
 }
 
 # ===================== подкоманды =====================
+cmd_precheck(){ # проверка ДО установки: доходят ли данные с домашнего ПК до этого IP
+  [ "$(id -u)" = 0 ] || die "нужен root"
+  local port="${1:-8080}" dir ip opened=0 busy
+  [[ "$port" =~ ^[0-9]+$ ]] || die "порт должен быть числом"
+  busy=$(ss -Htln "sport = :$port" 2>/dev/null) || true
+  [ -z "$busy" ] || die "порт $port занят — укажи другой: bash install.sh precheck 8090"
+  dir=$(mktemp -d); head -c 300000 /dev/urandom > "$dir/f.bin"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -c '^Status: active' >/dev/null; then
+    ufw allow "$port/tcp" comment 'vpn-setup precheck' >/dev/null && opened=1
+  fi
+  ip=$(detect_public_ip || true)
+  echo -e "${c_ok}Тестовый сервер запущен на 3 минуты (порт $port).${c_no}"
+  echo "С ДОМАШНЕГО ПК, VPN ВЫКЛЮЧЕН, выполни (MobaXterm → local terminal):"
+  echo "   bash check-server.sh ${ip:-IP_СЕРВЕРА} $port"
+  echo "или вручную:"
+  echo "   curl -s -o /dev/null --max-time 20 -w \"bytes=%{size_download}\\n\" http://${ip:-IP_СЕРВЕРА}:$port/f.bin"
+  echo "Ожидается bytes=300000. Ниже будут видны пришедшие запросы. Остановить раньше: Ctrl+C"
+  ( cd "$dir" && timeout 180 python3 -m http.server "$port" --bind 0.0.0.0 ) || true
+  rm -rf "$dir"
+  [ "$opened" = 1 ] && { ufw delete allow "$port/tcp" >/dev/null 2>&1 || true; }
+  echo "Тестовый сервер остановлен$([ "$opened" = 1 ] && echo ', порт закрыт')."
+  echo "Если на ПК было bytes=300000 — ставь:  bash install.sh   Если 0 — этот IP твой провайдер режет, ставить бессмысленно."
+}
+
 cmd_sni(){
   require_installed; load_config
   local new="${1:-}"
@@ -1956,7 +1982,10 @@ EOF
 # (нужно для ежедневного бэкапа по cron и последующих команд).
 if [ "$(id -u)" = 0 ] && [ ! -f "$0" ] && [ -z "${VPN_SETUP_REEXEC:-}" ] && [ "${SELF_URL#@@}" = "$SELF_URL" ]; then
   install -d -m 700 "$STATE"
-  if curl -fsSL --retry 3 --connect-timeout 15 -o "$STATE/install.sh.new" "$SELF_URL" && bash -n "$STATE/install.sh.new" \
+  # сначала ссылка на тег версии; если тега ещё нет — та же версия из main
+  if { curl -fsSL --retry 2 --connect-timeout 15 -o "$STATE/install.sh.new" "$SELF_URL" 2>/dev/null \
+       || curl -fsSL --retry 2 --connect-timeout 15 -o "$STATE/install.sh.new" "${SELF_URL%/*/install.sh}/main/install.sh"; } \
+     && bash -n "$STATE/install.sh.new" \
      && grep -c "^SCRIPT_VERSION=\"${SCRIPT_VERSION}\"$" "$STATE/install.sh.new" >/dev/null; then
     mv "$STATE/install.sh.new" "$STATE/install.sh"; chmod 700 "$STATE/install.sh"
     VPN_SETUP_REEXEC=1 exec bash "$STATE/install.sh" "$@"
@@ -1972,6 +2001,7 @@ case "${1:-install}" in
   install)      cmd_install ;;
   harden-ssh)   [ "$(id -u)" = 0 ] || die "нужен root"; harden_ssh ;;
   sni)          [ "$(id -u)" = 0 ] || die "нужен root"; cmd_sni "${2:-}" ;;
+  precheck)     cmd_precheck "${2:-}" ;;
   status)       require_installed; load_config; ops_status || exit 1 ;;
   links)        require_installed; load_config; ops_links "${2:-}" ;;
   backup)       require_installed; load_config; ops_backup "${2:-}" ;;
