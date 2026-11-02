@@ -279,7 +279,7 @@ harden_ssh(){
   local hf="$SSHD_DROPIN_DIR/$SSH_HARDEN_FILE_NAME" prev=""
   # 1. валидные ключи в authorized_keys
   [ -s "$SSH_AUTHKEYS" ] || die "в $SSH_AUTHKEYS нет ключей — отключать пароль нельзя, ты потеряешь доступ.
-  Сначала добавь ключ: SSH_PUBKEY='ssh-ed25519 AAAA...' bash install.sh"
+  Сначала добавь ключ: SSH_PUBKEY='ssh-ed25519 AAAA...' vpn-setup"
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line//$'\r'/}
     [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
@@ -317,7 +317,7 @@ $bad
   install -d -m 755 "$SSHD_DROPIN_DIR" "$SSHD_RUNDIR"
   if [ -f "$hf" ]; then prev=$(cat "$hf"); fi
   cat > "$hf" <<'EOF'
-# создано vpn-setup (bash install.sh harden-ssh). Откат: удалить файл и systemctl reload ssh
+# создано vpn-setup (vpn-setup harden-ssh). Откат: удалить файл и systemctl reload ssh
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# vpn-setup v1.0.1 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
+# vpn-setup v1.0.3 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
 # Ubuntu 22.04 / 24.04 / 26.04, amd64/arm64, запуск от root, на ЧИСТОМ сервере.
 #
-#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.1/install.sh)
+#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.3/install.sh)
 #   Потом:       bash /root/vpn-setup/install.sh help
 #
 # Переменные (необязательно, иначе спросит): USERS, SSH_PUBKEY, SNI, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
 set -Eeuo pipefail
 
-SCRIPT_VERSION="v1.0.1"
-SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.1/install.sh"
-XUI_VERSION="v3.8.5"   # закреплено: проверено с Xray 26.9.9 (Reality-XHTTP, Sudoku, VLESS-enc)
+SCRIPT_VERSION="v1.0.3"
+SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.3/install.sh"
+XUI_VERSION="v3.11.0"   # закреплено: проверено с Xray 26.10.21 (Reality-XHTTP, Sudoku, VLESS-enc)
 declare -A XUI_SHA256=(
-  [amd64]="6a85c110a04a727613c933c54ae602b8d37dab8876c6e20a6d46623010dd9d3c"
-  [arm64]="2dd601a32426fb19b0eafdffaead374a9cdb66be4dfb39407f9f50fa4e7234e7"
+  [amd64]="0ddfa4702f595442e2962acd81addc768fdacaa4ff2672c971a0463dae744916"
+  [arm64]="f50b4c30fd919d018f2f4c3d8db53a4ca027503d581328727770afb116a79d90"
 )
 STATE=${STATE:-/root/vpn-setup}
 
@@ -311,7 +311,7 @@ harden_ssh(){
   local hf="$SSHD_DROPIN_DIR/$SSH_HARDEN_FILE_NAME" prev=""
   # 1. валидные ключи в authorized_keys
   [ -s "$SSH_AUTHKEYS" ] || die "в $SSH_AUTHKEYS нет ключей — отключать пароль нельзя, ты потеряешь доступ.
-  Сначала добавь ключ: SSH_PUBKEY='ssh-ed25519 AAAA...' bash install.sh"
+  Сначала добавь ключ: SSH_PUBKEY='ssh-ed25519 AAAA...' vpn-setup"
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line//$'\r'/}
     [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
@@ -349,7 +349,7 @@ $bad
   install -d -m 755 "$SSHD_DROPIN_DIR" "$SSHD_RUNDIR"
   if [ -f "$hf" ]; then prev=$(cat "$hf"); fi
   cat > "$hf" <<'EOF'
-# создано vpn-setup (bash install.sh harden-ssh). Откат: удалить файл и systemctl reload ssh
+# создано vpn-setup (vpn-setup harden-ssh). Откат: удалить файл и systemctl reload ssh
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
@@ -529,7 +529,7 @@ ops_status(){
   if [ "$st" = active ]; then _ops_mark ok "служба x-ui: active"; else _ops_mark fail "служба x-ui: ${st:-нет данных} (journalctl -u x-ui -n 30)"; fi
 
   name=$(basename "$XRAY_BIN"); name=${name:0:15}
-  out=$(pgrep -x -- "$name" 2>/dev/null | head -n1) || out=""
+  out=$(pgrep -x -- "$name" 2>/dev/null | head -n1) || true
   if [ -n "$out" ]; then _ops_mark ok "процесс Xray запущен (pid $out)"; else _ops_mark fail "процесс Xray ($name) не найден"; fi
 
   if [ ! -x "$XRAY_BIN" ]; then
@@ -595,16 +595,16 @@ ops_status(){
   fi
 
   install -d -m 755 /run/sshd 2>/dev/null || true
-  out=$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2; exit}') || out=""
+  out=$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2; exit}') || true
   case "$out" in
     no)  _ops_mark ok "SSH: вход по паролю выключен";;
-    yes) _ops_mark warn "SSH: вход по паролю ВКЛЮЧЁН (после проверки входа по ключу: bash install.sh harden-ssh)";;
+    yes) _ops_mark warn "SSH: вход по паролю ВКЛЮЧЁН — после проверки входа по ключу выполни: vpn-setup harden-ssh";;
     *)   _ops_mark warn "SSH: не удалось определить (sshd -T)";;
   esac
 
   if [ -f /var/run/reboot-required ]; then
     l=$(sort -u /var/run/reboot-required.pkgs 2>/dev/null | tr '\n' ' ') || l=""
-    _ops_mark warn "нужна перезагрузка${l:+ (пакеты: ${l% })}"
+    _ops_mark warn "нужна перезагрузка: обновления безопасности${l:+ (${l% })} вступят в силу после команды reboot. VPN пропадёт на 1–2 мин — лучше ночью"
   else
     _ops_mark ok "перезагрузка не требуется"
   fi
@@ -631,7 +631,7 @@ ops_status(){
 
   out=$(find "$STATE/backup" -maxdepth 1 -type f \( -name 'vpn-*.tgz' -o -name 'x-ui-*.db' \) -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n1) || out=""
   if [ -z "$out" ]; then
-    _ops_mark warn "бэкапов нет: bash install.sh backup"
+    _ops_mark warn "бэкапов нет: vpn-setup backup"
   else
     p=${out%%.*}; l=$(( ($(date +%s) - p) / 3600 ))
     if [ "$l" -gt 48 ]; then _ops_mark warn "последний бэкап $((l / 24)) дн. назад: ${out#* }"
@@ -640,10 +640,15 @@ ops_status(){
   if [ -f "$CRON_FILE" ]; then _ops_mark ok "ежедневный бэкап по cron: включён"
   else _ops_mark warn "ежедневный бэкап по cron не настроен"; fi
 
-  out=$(timeout 10 "$XUI_DIR/x-ui" -v 2>/dev/null | head -n1) || out=""
-  l=$(timeout 10 "$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2; exit}') || l=""
+  out=$(timeout 10 "$XUI_DIR/x-ui" -v 2>/dev/null | head -n1) || true
+  l=$(timeout 10 "$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2; exit}') || true
   if [ -n "$out" ] && [ -n "$l" ]; then
-    if [ -n "${XUI_VERSION:-}" ] && [ "$out" != "${XUI_VERSION#v}" ]; then _ops_mark warn "версии: 3X-UI $out (ожидалась ${XUI_VERSION#v}), Xray $l"
+    if [ -n "${XUI_VERSION:-}" ] && [ "$out" != "${XUI_VERSION#v}" ]; then
+      if [ "$(printf '%s\n%s\n' "$out" "${XUI_VERSION#v}" | sort -V | tail -n 1)" = "${XUI_VERSION#v}" ]; then
+        _ops_mark warn "версии: 3X-UI $out устарела (скрипт ставит ${XUI_VERSION#v}) — обнови: vpn-setup (с бэкапом и автооткатом)"
+      else
+        _ops_mark warn "версии: 3X-UI $out новее проверенной ${XUI_VERSION#v} (обновили кнопкой в панели?) — работает, не трогай; кнопку «Обновить» больше не жми"
+      fi
     else _ops_mark ok "версии: 3X-UI $out, Xray $l"; fi
   else
     _ops_mark warn "версии: 3X-UI ${out:-?}, Xray ${l:-?}"
@@ -661,6 +666,8 @@ ops_status(){
     if [ "$out" = 1 ] && [ -z "$l" ]; then _ops_mark ok "IPv6: отключён"
     else _ops_mark warn "IPv6 не отключён (default.disable_ipv6=${out:-?}${l:+, адреса: ${l% }})"; fi
   fi
+
+  if declare -F domain_status >/dev/null; then domain_status; fi
 
   echo
   if [ "$_OPS_FAIL" = 0 ]; then echo -e "${c_ok:-}Критичных проблем нет.${c_no:-}"; return 0; fi
@@ -697,6 +704,8 @@ ops_links(){ # ops_links [USER]
         echo "$line"
         if [ "$qr" = 1 ]; then
           n=${line##*#}; if [ "$n" = "$line" ]; then n=""; fi
+          n=${n#%F0%9F%87%[A-F0-9][A-F0-9]%F0%9F%87%[A-F0-9][A-F0-9]%20}   # флаг страны в названии → убрать из имени файла
+          [ -n "${COUNTRY:-}" ] && n="${COUNTRY}_${n}"
           n=${n//[^A-Za-z0-9_-]/_}; n=${n:0:64}; [ -n "$n" ] || n="link"
           if [ -n "${used[$n]:-}" ]; then used[$n]=$(( used[$n] + 1 )); n="$n-${used[$n]}"; else used[$n]=1; fi
           if ( umask 077; qrencode -o "$STATE/qr/$n.png" "$line" ) 2>/dev/null; then cnt=$((cnt + 1)); else warn "QR для $n не создан"; fi
@@ -739,11 +748,12 @@ ops_uninstall(){
   final="$FINAL_BACKUP_DIR/vpn-setup-final-$ts.tgz"
   dest="${STATE%/}.removed-$ts"
   install -d -m 755 /run/sshd 2>/dev/null || true
-  ssh_port=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || ssh_port=""
+  ssh_port=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || true
 
   echo "Будет удалено: 3X-UI ($XUI_DIR, $XUI_ETC, $XUI_LOG, $XUI_UNIT, $XUI_CLI), cron бэкапа,"
   echo "правила UFW для портов ${PORT_REALITY:-443} ${PORT_SUDOKU:-8443} ${PORT_XHTTP:-8080}/tcp."
   echo "Перед удалением: финальный бэкап → $final; $STATE будет переименован в $dest."
+  [ -z "${DOMAIN:-}" ] || echo "Свой домен ${DOMAIN}: убирается наш сайт из nginx и порт 80; сертификат и /var/www/${DOMAIN} остаются."
   echo "SSH, правила UFW для SSH, fail2ban и sysctl НЕ трогаются."
   if [ "$dry" = 1 ]; then
     echo -e "${c_warn:-}DRY_RUN=1: ничего не изменяется, только показ действий.${c_no:-}"
@@ -797,6 +807,11 @@ ops_uninstall(){
     warn "ufw не найден — пропуск"
   fi
 
+  if [ -n "${DOMAIN:-}" ] && declare -F domain_disable >/dev/null; then
+    echo "  свой домен $DOMAIN: убираю наш сайт из nginx и порт 80 (сертификат и файлы сайта остаются)"
+    _ops_run domain_disable
+  fi
+
   step "Удаление 6/6: каталог состояния"
   if [ -d "$STATE" ]; then
     _ops_run mv -- "$STATE" "$dest"
@@ -826,14 +841,16 @@ ops_help(){
   cat <<'EOF'
 vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
-Использование:  bash install.sh [команда]
+Использование:  vpn-setup [команда]      (то же: bash /root/vpn-setup/install.sh [команда])
 
+  panel             как зайти в панель 3X-UI (SSH-туннель): готовые шаги для Windows/macOS/MobaXterm/PuTTY/телефона
   precheck [ПОРТ]   ДО установки: проверить, доходят ли данные с домашнего ПК до этого IP
                     (на ПК в это время: bash check-server.sh IP ПОРТ)
   (без команды)     установка или обновление; повторный запуск безопасен,
                     новые имена из USERS добавляются, старые ссылки не меняются
   harden-ssh        отключить вход по паролю (только после проверки входа по ключу!)
   sni [ДОМЕН]       подобрать/проверить сайт маскировки Reality (без аргумента — подбор)
+  domain ДОМЕН|off  свой домен: Reality маскируется под твой настоящий сайт на этом сервере (см. README)
   status            проверка состояния: службы, порты, firewall, fail2ban, SSH, диск, RAM,
                     бэкапы, версии; код выхода 1, если есть ✗
   links [ИМЯ]       показать ссылки (всех или одного пользователя) и пересоздать QR в /root/vpn-setup/qr/
@@ -845,6 +862,377 @@ vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
 Переменные установки: USERS, SSH_PUBKEY, SNI, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
 EOF
+}
+
+# lib/domain.sh — режим «свой домен» (Reality steal-oneself).
+# Reality на :443 отдаёт «чужим» (сканерам, ТСПУ, браузеру) настоящий сайт этого же сервера:
+#   клиент VPN ──TLS(SNI=домен)──> Xray :443 ── свой (ключ Reality) ──> VPN
+#   сканер     ──TLS(SNI=домен)──> Xray :443 ── чужой ──> nginx 127.0.0.1:DOMAIN_PORT (LE-сертификат, сайт-заглушка)
+#   :80 (nginx, публично) — только ACME webroot и 301 на https://домен
+# Ожидает из install.sh: STATE, warn, die, step, firewall_apply/firewall_remove_ports (lib/ssh.sh).
+# Переопределения для тестов/особых случаев:
+#   DOMAIN_SKIP_DNS=1        не проверять A/AAAA-записи домена
+#   DOMAIN_CERT_MODE=letsencrypt|staging|selfsigned   (по умолчанию letsencrypt; selfsigned — только тесты)
+#   DOMAIN_PORT=N            локальный TLS-порт nginx (иначе первый свободный из 9443..9499)
+#   DOMAIN_NGINX_DIR, DOMAIN_WWW_ROOT, DOMAIN_LE_DIR — каталоги (тесты)
+
+DOMAIN_NGINX_DIR=${DOMAIN_NGINX_DIR:-/etc/nginx}
+DOMAIN_WWW_ROOT=${DOMAIN_WWW_ROOT:-/var/www}
+DOMAIN_LE_DIR=${DOMAIN_LE_DIR:-/etc/letsencrypt}
+DOMAIN_SELF_DIR=${DOMAIN_SELF_DIR:-/etc/ssl/vpn-setup}
+DOMAIN_CONF_NAME=vpn-setup-domain.conf
+DOMAIN_HOOK=${DOMAIN_HOOK:-$DOMAIN_LE_DIR/renewal-hooks/deploy/vpn-setup-nginx.sh}
+# слова, по которым домен сразу выглядит как VPN (проверяются в имени без зоны)
+DOMAIN_BAD_WORDS="vpn proxy prox trojan vless vmess xray v2ray v2fly wireguard wg tunnel tun2 socks shadow ss-
+ reality outline amnezia hysteria tor- bypass unblock obhod rkn freenet antizapret zapret впн прокси обход туннел"
+DOMAIN_CF_NETS="173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18
+ 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14
+ 172.64.0.0/13 131.0.72.0/22"
+
+# ---------- имя ----------
+domain_normalize(){ # печатает домен в ASCII (punycode) нижним регистром; 1 — некорректно
+  local d="${1:-}"
+  d=$(python3 -I -c 'import sys
+d=sys.argv[1].strip().rstrip(".").lower()
+for p in ("https://","http://"): d=d[len(p):] if d.startswith(p) else d
+d=d.split("/")[0]
+try: print(d.encode("idna").decode())
+except Exception: sys.exit(1)' "$d" 2>/dev/null) || return 1
+  [[ "$d" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59})$ ]] || return 1
+  echo "$d"
+}
+domain_name_check(){ # die, если имя «кричит» VPN; warn для зон .ru/.su/.рф
+  local d="$1" base w
+  # без зоны; punycode (xn--…) раскодируем, иначе «случайные» буквы дают ложные совпадения
+  base=$(python3 -I -c 'import sys; print(".".join(l.encode().decode("idna") if l.startswith("xn--") else l for l in sys.argv[1].split(".")[:-1]))' "$d" 2>/dev/null) || base=${d%.*}
+  for w in $DOMAIN_BAD_WORDS; do
+    case "$base" in *"$w"*)
+      die "домен $d содержит «${w%-}» — по имени сразу видно VPN/прокси. Такие имена ТСПУ и РКН ловят первыми.
+  Возьми нейтральное имя (фамилия-фото, блог, мастерская…), без vpn/proxy/trojan/wg/tunnel и т.п." ;;
+    esac
+  done
+  case "$d" in
+    *.ru|*.su|*.xn--p1ai|*.xn--d1acj3b)
+      warn "домен в зоне .ru/.su/.рф: регистратор обязан приостановить его по требованию РКН, тогда маскировка пропадёт.
+  Надёжнее зарубежная зона (.com/.net/.org/.eu/.de…) у зарубежного регистратора." ;;
+  esac
+  return 0
+}
+
+# ---------- DNS ----------
+_domain_doh(){ # _domain_doh ИМЯ A|AAAA — адреса через DNS-over-HTTPS (Cloudflare, затем Google)
+  local n="$1" t="$2" u out
+  for u in "https://cloudflare-dns.com/dns-query?name=$n&type=$t" "https://dns.google/resolve?name=$n&type=$t"; do
+    out=$(curl -fsS --max-time 8 -H 'accept: application/dns-json' "$u" 2>/dev/null \
+      | python3 -I -c 'import json,sys
+t={"A":1,"AAAA":28}[sys.argv[1]]
+d=json.load(sys.stdin)
+if d.get("Status") not in (0,3): sys.exit(1)
+print("\n".join(a["data"] for a in d.get("Answer",[]) if a.get("type")==t))' "$t" 2>/dev/null) && { printf '%s\n' "$out" | sed '/^$/d'; return 0; }
+  done
+  return 1
+}
+domain_is_cloudflare(){ # domain_is_cloudflare IP
+  python3 -I -c 'import ipaddress,sys
+ip=ipaddress.ip_address(sys.argv[1])
+sys.exit(0 if any(ip in ipaddress.ip_network(n) for n in sys.argv[2].split()) else 1)' "$1" "$DOMAIN_CF_NETS" 2>/dev/null
+}
+domain_dns_check(){ # domain_dns_check ДОМЕН IP — A-записи ровно на этот IP, без AAAA и без Cloudflare-прокси
+  local d="$1" ip="$2" a aaaa x
+  if [ "${DOMAIN_SKIP_DNS:-0}" = 1 ]; then warn "проверка DNS для $d пропущена (DOMAIN_SKIP_DNS=1)"; return 0; fi
+  a=$(_domain_doh "$d" A) || die "не удалось проверить DNS домена $d (нет ответа от DNS-over-HTTPS). Повтори позже или DOMAIN_SKIP_DNS=1"
+  [ -n "$a" ] || die "у домена $d нет A-записи. В панели регистратора/DNS добавь: $d  A  $ip  (подождать 5–30 мин)"
+  for x in $a; do
+    if domain_is_cloudflare "$x"; then
+      die "$d указывает на Cloudflare ($x) — включено проксирование («оранжевое облако»).
+  В Cloudflare → DNS у записи $d переключи Proxy status на «DNS only» (серое облако) и подожди 5 мин."
+    fi
+  done
+  for x in $a; do
+    [ "$x" = "$ip" ] || die "$d указывает на $(echo "$a" | tr '\n' ' ')— а этот сервер $ip.
+  Исправь A-запись: $d → $ip (лишние A-записи удали), подожди 5–30 мин и повтори."
+  done
+  aaaa=$(_domain_doh "$d" AAAA) || aaaa=""
+  if [ -n "$aaaa" ]; then
+    die "у $d есть IPv6-запись (AAAA: $(echo "$aaaa" | tr '\n' ' ')), а на сервере IPv6 выключен —
+  сертификат не выпустится, и сайт по IPv6 будет «мёртвым». Удали AAAA-запись и повтори."
+  fi
+  echo "DNS: $d → $ip ✓"
+}
+
+# ---------- nginx ----------
+_domain_port_free(){ [ -z "$(ss -Htln "sport = :$1" 2>/dev/null)" ]; }
+domain_pick_port(){ # печатает локальный TLS-порт для nginx
+  local p
+  if [ -n "${DOMAIN_PORT:-}" ]; then echo "$DOMAIN_PORT"; return 0; fi
+  # порт, который уже занимает наш же сайт (прошлый запуск оборвался до сохранения config.env)
+  p=$(grep -o 'listen 127\.0\.0\.1:[0-9]*' "$DOMAIN_NGINX_DIR/sites-available/$DOMAIN_CONF_NAME" 2>/dev/null | head -n1 | cut -d: -f2) || p=""
+  if [ -n "$p" ]; then echo "$p"; return 0; fi
+  for p in $(seq 9443 9499); do
+    case " ${PORT_REALITY:-443} ${PORT_SUDOKU:-8443} ${PORT_XHTTP:-8080} ${P_PORT:-} " in *" $p "*) continue;; esac
+    if _domain_port_free "$p"; then echo "$p"; return 0; fi
+  done
+  die "нет свободного порта 9443..9499 для локального сайта"
+}
+_domain_nginx_reload(){
+  nginx -t -q 2>/dev/null || { nginx -t || true; return 1; }
+  systemctl enable nginx >/dev/null 2>&1 || true
+  if systemctl is-active --quiet nginx 2>/dev/null; then systemctl reload nginx; else systemctl restart nginx; fi
+}
+domain_cert_paths(){ # печатает "fullchain key" для домена в текущем режиме
+  local d="$1"
+  if [ "${DOMAIN_CERT_MODE:-letsencrypt}" = selfsigned ] \
+     || { [ -z "${DOMAIN_CERT_MODE:-}" ] && [ ! -e "$DOMAIN_LE_DIR/live/$d/fullchain.pem" ] && [ -s "$DOMAIN_SELF_DIR/$d.crt" ]; }; then
+    echo "$DOMAIN_SELF_DIR/$d.crt $DOMAIN_SELF_DIR/$d.key"
+  else
+    echo "$DOMAIN_LE_DIR/live/$d/fullchain.pem $DOMAIN_LE_DIR/live/$d/privkey.pem"
+  fi
+}
+_domain_http2_directive(){ # nginx ≥1.25.1: "http2 on;", раньше — параметр listen
+  local v
+  v=$(nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9.]*\).*#\1#p')
+  if [ -n "$v" ] && [ "$(printf '%s\n1.25.1\n' "$v" | sort -V | head -n1)" = 1.25.1 ]; then echo new; else echo old; fi
+}
+domain_write_nginx(){ # domain_write_nginx ДОМЕН ПОРТ http|full
+  local d="$1" port="$2" mode="$3" crt key h2 listen_tls conf
+  conf="$DOMAIN_NGINX_DIR/sites-available/$DOMAIN_CONF_NAME"
+  install -d "$DOMAIN_NGINX_DIR/sites-available" "$DOMAIN_NGINX_DIR/sites-enabled" "$DOMAIN_WWW_ROOT/_acme"
+  read -r crt key <<<"$(domain_cert_paths "$d")"
+  h2=$(_domain_http2_directive)
+  if [ "$h2" = new ]; then listen_tls="listen 127.0.0.1:${port} ssl default_server;
+    http2 on;"; else listen_tls="listen 127.0.0.1:${port} ssl http2 default_server;"; fi
+  {
+    cat <<EOF
+# vpn-setup: свой домен $d. Файл перезаписывается командой vpn-setup — правь сайт в $DOMAIN_WWW_ROOT/$d
+server {
+    listen 80 default_server;
+    server_name $d _;
+    server_tokens off;
+    location ^~ /.well-known/acme-challenge/ { root $DOMAIN_WWW_ROOT/_acme; default_type text/plain; }
+    location / { return 301 https://$d\$request_uri; }
+}
+EOF
+    if [ "$mode" = full ]; then
+      cat <<EOF
+# TLS только на loopback: снаружи сюда попадают лишь через Reality на :443
+server {
+    $listen_tls
+    server_name $d;
+    server_tokens off;
+    ssl_certificate     $crt;
+    ssl_certificate_key $key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:vpnsetup:5m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosniff always;
+    root $DOMAIN_WWW_ROOT/$d;
+    index index.html;
+    error_page 404 /404.html;
+    location = /favicon.ico { log_not_found off; access_log off; try_files /favicon.ico =404; }
+    location / { try_files \$uri \$uri.html \$uri/ =404; }
+}
+EOF
+    fi
+  } > "$conf.new"
+  mv -f "$conf.new" "$conf"
+  ln -sfn "../sites-available/$DOMAIN_CONF_NAME" "$DOMAIN_NGINX_DIR/sites-enabled/$DOMAIN_CONF_NAME"
+  # стандартная страница nginx на :80 выдала бы «голый» сервер — выключаем её (файл в sites-available остаётся)
+  if [ -L "$DOMAIN_NGINX_DIR/sites-enabled/default" ]; then rm -f "$DOMAIN_NGINX_DIR/sites-enabled/default"; : > "$STATE/domain.default-disabled"; fi
+  _domain_nginx_reload || die "nginx не принял конфиг (вывод nginx -t выше). Файл: $conf"
+}
+
+# ---------- сайт-заглушка ----------
+domain_decoy(){ # создаёт сайт в $DOMAIN_WWW_ROOT/ДОМЕН, если там ещё нет index.html (свой сайт не трогаем)
+  local d="$1" dir title y
+  dir="$DOMAIN_WWW_ROOT/$d"
+  if [ -f "$dir/index.html" ]; then echo "сайт: $dir уже есть — не трогаю"; return 0; fi
+  install -d -m 755 "$dir" "$dir/notes"
+  title=$(python3 -I -c 'import sys; b=sys.argv[1].split(".")[0].encode().decode("idna") if sys.argv[1].startswith("xn--") else sys.argv[1].split(".")[0]; print(" ".join(w.capitalize() for w in b.replace("_","-").split("-")))' "$d" 2>/dev/null) || title="Field Notes"
+  y=$(date +%Y)
+  cat > "$dir/style.css" <<'EOF'
+:root{--bg:#fbfaf7;--fg:#22211f;--mut:#6d6a63;--acc:#2f6f5e;--line:#e7e3da}
+@media (prefers-color-scheme:dark){:root{--bg:#171715;--fg:#e9e6df;--mut:#a29e94;--acc:#7cc2ad;--line:#2c2b27}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 Georgia,"Times New Roman",serif}
+.wrap{max-width:720px;margin:0 auto;padding:40px 20px 64px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:28px}
+header a.brand{font-size:22px;font-weight:bold;color:var(--fg);text-decoration:none}
+nav a{color:var(--mut);margin-left:16px;text-decoration:none;font-family:system-ui,sans-serif;font-size:15px}nav a:hover{color:var(--acc)}
+h1,h2{line-height:1.25}a{color:var(--acc)}.meta{color:var(--mut);font:14px system-ui,sans-serif}
+article{margin-bottom:34px}article h2{margin:0 0 4px;font-size:22px}article h2 a{color:var(--fg);text-decoration:none}
+footer{border-top:1px solid var(--line);margin-top:40px;padding-top:14px;color:var(--mut);font:14px system-ui,sans-serif}
+EOF
+  cat > "$dir/favicon.svg" <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2f6f5e"/><path d="M9 22c4-1 7-5 8-12 2 5 4 9 7 11" stroke="#fbfaf7" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>
+EOF
+  _domain_page(){ # _domain_page ФАЙЛ ЗАГОЛОВОК ТЕЛО
+    cat > "$1" <<EOF
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>$2</title><meta name="description" content="Notes on film photography, long walks and small repairs.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"></head>
+<body><div class="wrap">
+<header><a class="brand" href="/">$title</a><nav><a href="/">Notes</a><a href="/about">About</a></nav></header>
+$3
+<footer>© $y $title · written slowly, published rarely</footer>
+</div></body></html>
+EOF
+  }
+  _domain_page "$dir/index.html" "$title — notes" '
+<article><h2><a href="/notes/expired-film">Shooting expired film in winter</a></h2>
+<p class="meta">January · 6 min read</p>
+<p>Three rolls of Fomapan that expired in 2009, one cheap rangefinder and a week of grey skies. What came out, what did not, and why I now overexpose everything by two stops.</p></article>
+<article><h2><a href="/notes/bike-wheel">Truing a bicycle wheel without a stand</a></h2>
+<p class="meta">November · 4 min read</p>
+<p>Zip ties, a spoke key and patience. A small guide for the kitchen-table mechanic.</p></article>
+<article><h2><a href="/notes/river-walk">Forty kilometres along the river</a></h2>
+<p class="meta">September · 8 min read</p>
+<p>Two days, one tent, too many photos of bridges. A route that is flat, quiet and has a bakery at both ends.</p></article>'
+  _domain_page "$dir/about.html" "About — $title" '
+<h1>About</h1>
+<p>Hi. This is a small personal notebook: film photography, walking routes, and fixing things instead of throwing them away.</p>
+<p>No ads, no tracking, no newsletter. Posts appear when there is something worth writing down.</p>'
+  _domain_page "$dir/notes/expired-film.html" "Shooting expired film in winter — $title" '
+<h1>Shooting expired film in winter</h1><p class="meta">January · 6 min read</p>
+<p>Old black-and-white film loses speed and gains fog. The usual rule is one stop of extra exposure per decade; with cold storage you can be gentler.</p>
+<p>I metered for ISO 25 instead of 100, developed in Rodinal 1+50 for eleven minutes and got thin but printable negatives. Grain is heavy, contrast is soft, and the snow looks like old paper — which is exactly what I wanted.</p>'
+  _domain_page "$dir/notes/bike-wheel.html" "Truing a bicycle wheel without a stand — $title" '
+<h1>Truing a bicycle wheel without a stand</h1><p class="meta">November · 4 min read</p>
+<p>Flip the bike, fix a zip tie to the frame so its tail almost touches the rim, and spin. Where the rim touches the tie, loosen the spoke on that side and tighten the opposite one by a quarter turn.</p>
+<p>Small steps. Re-check often. Stop when it is good enough — perfect is for people with stands.</p>'
+  _domain_page "$dir/notes/river-walk.html" "Forty kilometres along the river — $title" '
+<h1>Forty kilometres along the river</h1><p class="meta">September · 8 min read</p>
+<p>The path follows the old towpath almost the whole way. Water every ten kilometres, shade until noon, and a ferry that only runs on weekends — check before you go.</p>'
+  _domain_page "$dir/404.html" "Not found — $title" '<h1>Not found</h1><p>This page does not exist (any more). Try the <a href="/">notes</a>.</p>'
+  printf 'User-agent: *\nAllow: /\nSitemap: https://%s/sitemap.xml\n' "$d" > "$dir/robots.txt"
+  {
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    for u in "" about notes/expired-film notes/bike-wheel notes/river-walk; do echo "  <url><loc>https://$d/$u</loc></url>"; done
+    echo '</urlset>'
+  } > "$dir/sitemap.xml"
+  # «живые» даты изменения: страницы писались в прошлые месяцы, а не в момент установки
+  local f i=0
+  for f in "$dir"/notes/river-walk.html "$dir"/notes/bike-wheel.html "$dir"/about.html "$dir"/notes/expired-film.html \
+           "$dir"/404.html "$dir"/style.css "$dir"/favicon.svg "$dir"/robots.txt "$dir"/sitemap.xml "$dir"/index.html; do
+    i=$((i+1)); touch -d "@$(( $(date +%s) - (200 - i*17) * 86400 - RANDOM ))" "$f" 2>/dev/null || true
+  done
+  chmod -R a+rX "$dir"
+  echo "сайт-заглушка: $dir (можно заменить своими файлами — vpn-setup его больше не перезапишет)"
+}
+
+# ---------- сертификат ----------
+domain_cert(){ # выпуск/проверка сертификата для ДОМЕН
+  local d="$1" mode="${DOMAIN_CERT_MODE:-letsencrypt}" crt key
+  read -r crt key <<<"$(DOMAIN_CERT_MODE="$mode" domain_cert_paths "$d")"
+  if [ "$mode" = selfsigned ]; then
+    install -d -m 700 "$DOMAIN_SELF_DIR"
+    if [ ! -s "$crt" ]; then
+      openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 90 \
+        -subj "/CN=$d" -addext "subjectAltName=DNS:$d" -keyout "$key" -out "$crt" >/dev/null 2>&1 \
+        || die "openssl: не удалось создать тестовый сертификат"
+      chmod 600 "$key"
+    fi
+    warn "сертификат самоподписанный (DOMAIN_CERT_MODE=selfsigned) — только для тестов"
+    return 0
+  fi
+  command -v certbot >/dev/null 2>&1 || die "certbot не установлен"
+  if [ -s "$crt" ] && openssl x509 -checkend $((30*86400)) -noout -in "$crt" >/dev/null 2>&1; then
+    echo "сертификат $d уже есть и действует ещё >30 дней"
+  else
+    local -a extra=()
+    [ "$mode" = staging ] && extra+=(--staging)
+    echo "выпускаю сертификат Let's Encrypt для $d (проверка через http://$d/.well-known/…)"
+    certbot certonly --webroot -w "$DOMAIN_WWW_ROOT/_acme" -d "$d" --non-interactive --agree-tos \
+      --register-unsafely-without-email --keep-until-expiring "${extra[@]}" \
+      || die "Let's Encrypt не выдал сертификат для $d. Частые причины: A-запись ещё не обновилась;
+  порт 80 закрыт у хостера; включён Cloudflare-прокси. Повтори через 10–30 минут: vpn-setup domain $d"
+  fi
+  install -d "$(dirname "$DOMAIN_HOOK")"
+  printf '#!/bin/sh\n# vpn-setup: перечитать сертификат после продления\nsystemctl reload nginx\n' > "$DOMAIN_HOOK"
+  chmod 755 "$DOMAIN_HOOK"
+  systemctl enable --now certbot.timer >/dev/null 2>&1 || true
+}
+
+# ---------- включение / выключение ----------
+domain_setup(){ # domain_setup ДОМЕН IP — nginx + сайт + сертификат; печатает в DOMAIN_PORT порт
+  local d="$1" ip="$2"
+  domain_name_check "$d"
+  domain_dns_check "$d" "$ip"
+  if ! command -v nginx >/dev/null 2>&1 || { [ "${DOMAIN_CERT_MODE:-letsencrypt}" != selfsigned ] && ! command -v certbot >/dev/null 2>&1; }; then
+    echo "ставлю nginx и certbot…"
+    command -v nginx >/dev/null 2>&1 || : > "$STATE/domain.nginx-installed"
+    # Не даём пакету запустить nginx со стандартным сайтом: в нём "listen [::]:80", а IPv6 на сервере
+    # выключен — запуск падает и apt оставляет пакет недонастроенным. Стандартный механизм Debian: policy-rc.d.
+    local prc=/usr/sbin/policy-rc.d made_prc=0 rc=0
+    if [ ! -e "$prc" ]; then printf '#!/bin/sh\nexit 101\n' > "$prc"; chmod 755 "$prc"; made_prc=1; fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=600 nginx certbot >/dev/null || rc=$?
+    [ "$made_prc" = 1 ] && rm -f "$prc"
+    [ "$rc" = 0 ] || die "apt: не удалось поставить nginx/certbot"
+  fi
+  DOMAIN_PORT=$(domain_pick_port)   # сохранённый порт переиспользуется (DOMAIN_PORT из config.env)
+  domain_decoy "$d"
+  domain_write_nginx "$d" "$DOMAIN_PORT" http
+  domain_cert "$d"
+  domain_write_nginx "$d" "$DOMAIN_PORT" full
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do domain_local_probe "$d" "$DOMAIN_PORT" && break; sleep 1; done   # reload nginx асинхронный
+  domain_local_probe "$d" "$DOMAIN_PORT" || die "сайт $d не отвечает на 127.0.0.1:$DOMAIN_PORT по TLS 1.3 + HTTP/2"
+  echo "свой сайт: https://$d → nginx 127.0.0.1:$DOMAIN_PORT (TLS 1.3, HTTP/2) ✓"
+}
+domain_local_probe(){ # domain_local_probe ДОМЕН ПОРТ — TLS1.3 + h2 + 200 на /
+  local d="$1" port="$2" out
+  out=$(curl -sk --noproxy '*' --http2 --tlsv1.3 --max-time 8 -o /dev/null -w '%{http_version} %{http_code}' \
+        --resolve "$d:$port:127.0.0.1" "https://$d:$port/" 2>/dev/null) || return 1
+  [ "$out" = "2 200" ]
+}
+domain_disable(){ # убрать наш сайт из nginx (сертификат и файлы сайта остаются), закрыть :80
+  local conf="$DOMAIN_NGINX_DIR/sites-available/$DOMAIN_CONF_NAME"
+  rm -f "$DOMAIN_NGINX_DIR/sites-enabled/$DOMAIN_CONF_NAME" "$conf" "$DOMAIN_HOOK"
+  if [ -f "$STATE/domain.nginx-installed" ]; then
+    systemctl disable --now nginx >/dev/null 2>&1 || true
+    rm -f "$STATE/domain.nginx-installed"
+    echo "nginx остановлен (его ставил vpn-setup)"
+  elif command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+    if [ -f "$STATE/domain.default-disabled" ] && [ -f "$DOMAIN_NGINX_DIR/sites-available/default" ]; then
+      ln -sfn ../sites-available/default "$DOMAIN_NGINX_DIR/sites-enabled/default"
+      # стандартный сайт не запустится без IPv6 ("listen [::]:80") — тогда не возвращаем его
+      if ! nginx -t -q >/dev/null 2>&1; then
+        rm -f "$DOMAIN_NGINX_DIR/sites-enabled/default"
+        warn "стандартный сайт nginx не возвращён: он требует IPv6, а IPv6 выключен"
+      fi
+    fi
+    _domain_nginx_reload || warn "nginx -t после удаления нашего сайта не прошёл — проверь: nginx -t"
+  fi
+  rm -f "$STATE/domain.default-disabled"
+  if declare -F firewall_remove_ports >/dev/null; then firewall_remove_ports 80 || true; fi
+  echo "режим своего домена выключен (сертификат в $DOMAIN_LE_DIR и сайт в $DOMAIN_WWW_ROOT оставлены)"
+}
+
+# ---------- статус ----------
+domain_status(){ # строки для ops_status (использует _ops_mark)
+  [ -n "${DOMAIN:-}" ] || return 0
+  local crt key end days st l
+  read -r crt key <<<"$(domain_cert_paths "$DOMAIN")"
+  _ops_mark ok "свой домен: $DOMAIN (Reality → nginx 127.0.0.1:${DOMAIN_PORT:-?})"
+  st=$(systemctl is-active nginx 2>/dev/null) || true
+  if [ "$st" = active ]; then _ops_mark ok "nginx: active"; else _ops_mark fail "nginx: ${st:-нет данных} (systemctl status nginx)"; fi
+  if [ -s "$crt" ]; then
+    end=$(openssl x509 -enddate -noout -in "$crt" 2>/dev/null | cut -d= -f2) || end=""
+    days=$(( ( $(date -d "$end" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
+    if [ "$days" -lt 0 ]; then _ops_mark fail "сертификат $DOMAIN истёк — certbot renew; systemctl reload nginx"
+    elif [ "$days" -lt 20 ]; then _ops_mark warn "сертификат $DOMAIN: осталось $days дн. (должен продлеваться сам; проверь: certbot renew --dry-run)"
+    else _ops_mark ok "сертификат $DOMAIN: ещё $days дн."; fi
+  else
+    _ops_mark fail "нет сертификата $crt (vpn-setup domain $DOMAIN)"
+  fi
+  if domain_local_probe "$DOMAIN" "${DOMAIN_PORT:-0}"; then _ops_mark ok "сайт-маска отвечает (TLS 1.3, HTTP/2)"
+  else _ops_mark fail "сайт-маска на 127.0.0.1:${DOMAIN_PORT:-?} не отвечает (nginx -t; systemctl status nginx)"; fi
+  l=$(_ops_listeners 80 | tr '\n' ' ')
+  if [ -n "${l// /}" ]; then _ops_mark ok "порт 80/tcp слушается (для продления сертификата)"; else _ops_mark warn "порт 80 не слушается — сертификат не продлится"; fi
+  return 0
 }
 
 # ===================== общие функции =====================
@@ -860,8 +1248,9 @@ load_config(){
 }
 save_config(){
   ( umask 077
-    printf 'USERS=%q\nSNI=%q\nPORT_REALITY=%q\nPORT_SUDOKU=%q\nPORT_XHTTP=%q\nPUBLIC_IP=%q\nINSTALLED_VERSION=%q\n' \
-      "${USERS:-}" "${SNI:-}" "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" "${PUBLIC_IP:-}" "$SCRIPT_VERSION" > "$STATE/config.env" )
+    printf 'USERS=%q\nSNI=%q\nPORT_REALITY=%q\nPORT_SUDOKU=%q\nPORT_XHTTP=%q\nPUBLIC_IP=%q\nCOUNTRY=%q\nDOMAIN=%q\nDOMAIN_PORT=%q\nBORROWED_SNI=%q\nINSTALLED_VERSION=%q\n' \
+      "${USERS:-}" "${SNI:-}" "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" "${PUBLIC_IP:-}" "${COUNTRY:-}" \
+      "${DOMAIN:-}" "${DOMAIN_PORT:-}" "${BORROWED_SNI:-}" "$SCRIPT_VERSION" > "$STATE/config.env" )
 }
 require_installed(){
   [ -f "$STATE/panel.env" ] && [ -x /usr/local/x-ui/x-ui ] || die "установка не найдена. Сначала: bash install.sh"
@@ -888,6 +1277,8 @@ TOKEN = pathlib.Path(E["TOKEN_FILE"]).read_text().strip()
 STATE = pathlib.Path(E["STATE_DIR"])
 XRAY = E["XRAY_BIN"]
 SET_SNI = E.get("SET_SNI", "").strip().lower().rstrip(".")
+# Свой домен: Reality пересылает «чужих» на локальный nginx (127.0.0.1:PORT) вместо SNI:443
+REALITY_TARGET = E.get("REALITY_TARGET", "").strip()
 
 
 def die(msg):
@@ -984,13 +1375,16 @@ def set_sni(dom):
     if stream.get("security") != "reality" or not isinstance(rs, dict):
         die("inbound vpn-reality не использует REALITY — менять SNI нечего")
     was = rs.get("serverNames") or []
-    if rs.get("target") == f"{dom}:443" and was == [dom]:
+    tgt = REALITY_TARGET or f"{dom}:443"
+    if rs.get("target") == tgt and was == [dom]:
         print(f"SNI: уже {dom} (inbound id {iid}), изменений нет")
     else:
-        rs["target"], rs["serverNames"] = f"{dom}:443", [dom]
+        was_tgt = rs.get("target")
+        rs["target"], rs["serverNames"] = tgt, [dom]
         body = dict(old, streamSettings=json.dumps(stream) if isinstance(raw, str) else stream)
         api("POST", f"/panel/api/inbounds/update/{iid}", body)
-        print(f"SNI: {', '.join(was) or '—'} → {dom} (inbound id {iid})")
+        print(f"SNI: {', '.join(was) or '—'} → {dom} (inbound id {iid})"
+              + (f", target {was_tgt} → {tgt}" if was_tgt != tgt else ""))
 
         def rollback(err):
             api("POST", f"/panel/api/inbounds/update/{iid}", old)
@@ -1021,24 +1415,40 @@ SNIFF = json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "m
 XHTTP_BASE = {"mode": "auto", "host": "", "headers": {}, "noSSEHeader": False, "xPaddingBytes": "100-1000",
               "scMaxEachPostBytes": "1000000", "scMaxBufferedPosts": 30, "scStreamUpServerSecs": "20-80"}
 
+FLAG = E.get("FLAG", "").strip()
+def remark(base):
+    return f"{FLAG} {base}" if FLAG else base
+
+
+def set_remark(iid, want):
+    """Переименовать inbound (флаг страны в названии); меняется только remark."""
+    old = api("GET", f"/panel/api/inbounds/get/{iid}")
+    if old.get("remark") == want:
+        return False
+    old.pop("clientStats", None)
+    api("POST", f"/panel/api/inbounds/update/{iid}", dict(old, remark=want))
+    print(f"inbound id {iid}: название → {want}")
+    return True
+
+
 INBOUNDS = [
-    {"tag": "vpn-reality", "remark": "Reality-XHTTP", "port": P_REALITY,
+    {"tag": "vpn-reality", "remark": remark("Reality-XHTTP"), "port": P_REALITY,
      "settings": {"clients": [], "decryption": "none", "fallbacks": []},
      "stream": {"network": "xhttp", "security": "reality",
                 "xhttpSettings": dict(XHTTP_BASE, path=p_reality),
-                "realitySettings": {"show": False, "xver": 0, "target": f"{SNI}:443", "serverNames": [SNI],
+                "realitySettings": {"show": False, "xver": 0, "target": REALITY_TARGET or f"{SNI}:443", "serverNames": [SNI],
                                     "privateKey": reality["private"], "shortIds": [sid],
                                     "minClientVer": "", "maxClientVer": "", "maxTimediff": 0,
                                     "settings": {"publicKey": reality["public"], "fingerprint": "firefox",
                                                  "serverName": "", "spiderX": "/"}}}},
-    {"tag": "vpn-sudoku", "remark": "Sudoku-VLESSenc", "port": P_SUDOKU,
+    {"tag": "vpn-sudoku", "remark": remark("Sudoku-VLESSenc"), "port": P_SUDOKU,
      "settings": {"clients": [], "decryption": venc["decryption"], "encryption": venc["encryption"]},
      "stream": {"network": "tcp", "security": "none",
                 "tcpSettings": {"acceptProxyProtocol": False, "header": {"type": "none"}},
                 "finalmask": {"tcp": [{"type": "sudoku", "settings": {
                     "password": sudoku_pw, "ascii": "", "customTable": "", "customTables": [],
                     "paddingMin": 0, "paddingMax": 0}}]}}},
-    {"tag": "vpn-xhttp", "remark": "XHTTP-VLESSenc", "port": P_XHTTP,
+    {"tag": "vpn-xhttp", "remark": remark("XHTTP-VLESSenc"), "port": P_XHTTP,
      "settings": {"clients": [], "decryption": venc["decryption"], "encryption": venc["encryption"]},
      "stream": {"network": "xhttp", "security": "none", "xhttpSettings": dict(XHTTP_BASE, path=p_xhttp)}},
 ]
@@ -1063,6 +1473,7 @@ for d in INBOUNDS:
     if d["tag"] in existing:
         ib = existing[d["tag"]]
         ids.append(ib["id"])
+        set_remark(ib["id"], d["remark"])
         if not ib.get("enable", True):
             api("POST", f"/panel/api/inbounds/setEnable/{ib['id']}", {"enable": True})
             print(f"inbound {d['tag']}: был выключен — включаю (id {ib['id']})")
@@ -1111,33 +1522,76 @@ PYEOF
   sni.py pick [--neighbors IP] [--default DOMAIN] интерактивный выбор; домен — последней строкой stdout
 
 Общие флаги (для тестов): --resolve DOMAIN:IP (можно несколько), --port N, --cafile PATH,
-  --no-http, --timeout S, --candidates a,b,c (заменить встроенный список), --non-interactive.
+  --no-http, --timeout S, --candidates a,b,c (заменить встроенный список), --non-interactive,
+  --server-country CC (страна сервера; иначе — по RDAP для --neighbors), --rdap-offline (без RDAP).
+  SNI_RDAP_FILE=fixture.json — ответы RDAP из файла вместо сети:
+    {"domain": {"example.de": {RDAP-ответ}}, "ip": {"1.2.3.4": {"country": "DE"}}}
+
+Строгие правила: соседи по /24 — только если имя из сертификата резолвится в IP этого соседа
+  (иначе это чужой Reality/прокси) и никогда не по умолчанию; дешёвые TLD, домены моложе 2 лет
+  (RDAP) и российский сегмент на зарубежном сервере — FAIL.
 """
-import argparse, ipaddress, json, os, queue, re, shutil, socket, ssl, subprocess, sys, tempfile, threading, time
-from urllib.parse import urlsplit
+import argparse, datetime, ipaddress, json, os, queue, re, shutil, socket, ssl, subprocess, sys, tempfile, threading, time
+import urllib.error, urllib.request
+from urllib.parse import quote, urlsplit
 
 OK, WARN, FAIL = 0, 1, 2
 VNAME = {OK: "OK", WARN: "WARN", FAIL: "FAIL"}
 LATENCY_WARN_MS = 150
 
-# Скучные, посещаемые, неполитические сайты; страна — для подсказки. Всё проверяется на лету,
-# CDN-фронтированные отсеются проверкой, так что список намеренно с запасом.
+# Скучные, посещаемые, неполитические сайты на собственной инфраструктуре (не Akamai/CloudFront —
+# заведомо CDN-фронтированные убраны); страна — для подсказки. Всё равно проверяется на лету.
+# Предпочтение — сайтам, привычным посетителям из РФ (магазины электроники/инструмента, почта,
+# железные дороги, финские магазины, которые знали жители Петербурга) и в DE/FI рядом с типичными VPS.
 CANDIDATES = [
-    ("www.lidl.de", "DE"), ("www.otto.de", "DE"), ("www.dhl.de", "DE"), ("www.rewe.de", "DE"),
-    ("www.bahn.de", "DE"), ("www.kaufland.de", "DE"), ("www.dm.de", "DE"), ("www.hornbach.de", "DE"),
-    ("www.ah.nl", "NL"), ("www.ns.nl", "NL"), ("www.postnl.nl", "NL"), ("www.jumbo.com", "NL"),
-    ("www.s-kanava.fi", "FI"), ("www.k-ruoka.fi", "FI"), ("www.posti.fi", "FI"), ("www.vr.fi", "FI"),
+    ("www.otto.de", "DE"), ("www.lidl.de", "DE"), ("www.hornbach.de", "DE"), ("www.thomann.de", "DE"),
+    ("www.reichelt.de", "DE"), ("www.conrad.de", "DE"), ("www.alternate.de", "DE"), ("www.chefkoch.de", "DE"),
+    ("www.idealo.de", "DE"), ("www.heise.de", "DE"), ("www.kaufland.de", "DE"), ("www.dm.de", "DE"),
+    ("www.verkkokauppa.com", "FI"), ("www.gigantti.fi", "FI"), ("www.tokmanni.fi", "FI"), ("www.motonet.fi", "FI"),
+    ("www.s-kanava.fi", "FI"), ("www.posti.fi", "FI"), ("www.vr.fi", "FI"), ("www.k-ruoka.fi", "FI"),
+    ("www.postnl.nl", "NL"), ("www.coolblue.nl", "NL"),
     ("www.ica.se", "SE"), ("www.postnord.se", "SE"), ("www.sj.se", "SE"),
-    ("www.inpost.pl", "PL"), ("www.intercity.pl", "PL"), ("www.pkobp.pl", "PL"), ("www.biedronka.pl", "PL"),
-    ("www.carrefour.fr", "FR"), ("www.laposte.fr", "FR"), ("www.leroymerlin.fr", "FR"),
     ("www.billa.at", "AT"), ("www.oebb.at", "AT"), ("www.post.at", "AT"),
-    ("www.alza.cz", "CZ"), ("www.cd.cz", "CZ"), ("www.seznam.cz", "CZ"),
-    ("www.rimi.ee", "EE"), ("www.omniva.ee", "EE"),
-    ("www.rimi.lv", "LV"), ("www.airbaltic.com", "LV"),
-    ("www.maxima.lt", "LT"), ("www.post.lt", "LT"),
-    ("www.esselunga.it", "IT"), ("www.poste.it", "IT"), ("www.trenitalia.com", "IT"),
-    ("www.mercadona.es", "ES"), ("www.renfe.com", "ES"), ("www.correos.es", "ES"),
+    ("www.seznam.cz", "CZ"), ("www.mapy.cz", "CZ"), ("www.alza.cz", "CZ"), ("www.cd.cz", "CZ"),
+    ("www.inpost.pl", "PL"), ("www.intercity.pl", "PL"), ("www.x-kom.pl", "PL"),
+    ("www.rimi.ee", "EE"), ("www.omniva.ee", "EE"), ("www.rimi.lv", "LV"),
+    ("www.post.lt", "LT"), ("www.maxima.lt", "LT"),
+    ("www.correos.es", "ES"), ("www.mercadona.es", "ES"),
 ]
+
+# Сайты, которые отказывают посетителям из РФ (geo-block). Reality это не ломает (сайт открывает
+# сервер, а не браузер пользователя), но для пользователей из РФ такая маскировка менее естественна.
+# Сравнение по регистрируемому домену.
+GEOBLOCK_RU = frozenset({"dm.de", "maxima.lt"})
+
+# Дешёвые/«одноразовые» TLD: регистрируют массово под фишинг, спам и чужие панели — FAIL.
+SUSPICIOUS_TLDS = frozenset(
+    "fun site xyz top shop online click icu buzz cyou monster rest lol quest sbs cfd bond beauty hair "
+    "skin makeup boats homes yachts mom autos motorcycles".split())
+
+# Российский сегмент: на зарубежном сервере выглядит неестественно и под особым контролем ТСПУ.
+RU_TLDS = frozenset({"ru", "su", "xn--p1ai"})                       # xn--p1ai = .рф
+RU_BRANDS = frozenset({"vk", "vkontakte", "vkuser", "userapi", "odnoklassniki", "yandex", "yastatic"})
+
+# Зарезервированные TLD (RFC 2606/6761 и локальные) — RDAP по ним не спрашиваем.
+RESERVED_TLDS = frozenset({"test", "example", "invalid", "localhost", "local", "internal", "lan", "home", "arpa"})
+
+# Мини-подмножество Public Suffix List: двухуровневые суффиксы. Остальное — одноуровневый TLD
+# (+ эвристика «co./com./… в двухбуквенной зоне», см. registrable()).
+MULTI_SUFFIXES = frozenset("""
+co.uk org.uk me.uk ltd.uk plc.uk ac.uk gov.uk net.uk com.au net.au org.au edu.au gov.au id.au
+co.nz net.nz org.nz co.jp ne.jp or.jp ac.jp co.za com.br net.br com.tr net.tr org.tr
+com.ua org.ua net.ua in.ua kiev.ua com.pl net.pl org.pl waw.pl com.cn net.cn org.cn com.hk com.tw
+co.kr or.kr com.sg com.my co.in net.in org.in co.id co.il org.il com.mx com.ar co.at or.at com.gr
+com.cy com.mt com.ro co.hu com.ee com.lv com.pt com.es msk.ru spb.ru com.ru net.ru org.ru com.by
+co.th com.vn com.ph com.pk com.eg com.sa""".split())
+
+# RDAP: возраст домена и страна IP. Таймаут на запрос, общий бюджет на прогон, не больше 4 параллельно.
+RDAP_URL = "https://rdap.org"
+RDAP_TIMEOUT = 5.0
+RDAP_BUDGET = 25.0
+AGE_FAIL_DAYS = 2 * 365
+AGE_NOTE_DAYS = 5 * 365
 
 # Имена, которые используют все подряд: их SNI на чужом IP — заметный признак.
 OVERUSED = ("microsoft", "apple", "icloud", "google", "gstatic", "youtube", "yahoo", "amazon", "aws",
@@ -1170,7 +1624,8 @@ CDN_HEADERS = [("server", r"cloudflare", "Cloudflare"), ("cf-ray", r".", "Cloudf
 _2LD = {"co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "gv"}
 HOST_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
-OPT = argparse.Namespace(resolve={}, port=443, cafile=None, no_http=False, timeout=4.0)
+OPT = argparse.Namespace(resolve={}, port=443, cafile=None, no_http=False, timeout=4.0,
+                         server_country=None, rdap_offline=False)
 
 
 def log(msg=""):
@@ -1187,9 +1642,107 @@ def cdn_of(ip):
 
 def registrable(host):
     lab = host.lower().rstrip(".").split(".")
-    if len(lab) >= 3 and lab[-2] in _2LD and len(lab[-1]) == 2:
+    if len(lab) >= 3 and (".".join(lab[-2:]) in MULTI_SUFFIXES or (lab[-2] in _2LD and len(lab[-1]) == 2)):
         return ".".join(lab[-3:])
     return ".".join(lab[-2:])
+
+
+def ru_segment(host):
+    lab = host.lower().rstrip(".").split(".")
+    return lab[-1] in RU_TLDS or registrable(host).split(".")[0] in RU_BRANDS
+
+
+def geoblocks_ru(host):
+    return registrable(host) in GEOBLOCK_RU
+
+
+# ---------- RDAP (возраст домена, страна IP) ----------
+
+_RDAP = {"cache": {}, "lock": threading.Lock(), "sem": threading.Semaphore(4), "deadline": None,
+         "off": False, "fx": None, "fx_loaded": False}
+
+
+def _rdap_fixture():
+    """Содержимое SNI_RDAP_FILE (dict) или None, если переменная не задана."""
+    with _RDAP["lock"]:
+        if not _RDAP["fx_loaded"]:
+            _RDAP["fx_loaded"] = True
+            path = os.environ.get("SNI_RDAP_FILE")
+            if path:
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        _RDAP["fx"] = json.load(f)
+                except (OSError, ValueError) as e:
+                    log(f"SNI_RDAP_FILE: не прочитан ({e}) — RDAP отключён")
+                    _RDAP["fx"] = {}
+        return _RDAP["fx"]
+
+
+def _rdap_fetch(kind, key):
+    fx = _rdap_fixture()
+    if fx is not None:  # режим фикстуры: сеть не трогаем вовсе
+        v = (fx.get(kind) or {}).get(key)
+        return v if isinstance(v, dict) else None
+    if OPT.rdap_offline or _RDAP["off"]:
+        return None
+    if kind == "domain" and key.rsplit(".", 1)[-1] in RESERVED_TLDS:
+        return None
+    if kind == "ip":
+        try:
+            if not ipaddress.ip_address(key).is_global:
+                return None
+        except ValueError:
+            return None
+    with _RDAP["sem"]:
+        now = time.monotonic()
+        with _RDAP["lock"]:
+            if _RDAP["deadline"] is None:
+                _RDAP["deadline"] = now + RDAP_BUDGET
+            left = _RDAP["deadline"] - now
+        if left < 1 or _RDAP["off"]:
+            return None
+        req = urllib.request.Request(f"{RDAP_URL}/{kind}/{quote(key)}", headers={
+            "Accept": "application/rdap+json, application/json", "User-Agent": "sni.py (reality target check)"})
+        try:
+            with urllib.request.urlopen(req, timeout=min(RDAP_TIMEOUT, left)) as resp:
+                data = json.loads(resp.read(1 << 20).decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429:  # rate limit — больше не долбим в этом прогоне
+                _RDAP["off"] = True
+            return None
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+            return None
+    return data if isinstance(data, dict) else None
+
+
+def rdap(kind, key):
+    ck = (kind, key)
+    with _RDAP["lock"]:
+        if ck in _RDAP["cache"]:
+            return _RDAP["cache"][ck]
+    v = _rdap_fetch(kind, key)
+    with _RDAP["lock"]:
+        _RDAP["cache"][ck] = v
+    return v
+
+
+def domain_registered(host):
+    """Дата регистрации регистрируемого домена (datetime.date) по RDAP или None."""
+    j = rdap("domain", registrable(host))
+    for ev in (j or {}).get("events") or []:
+        if isinstance(ev, dict) and ev.get("eventAction") == "registration":
+            m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(ev.get("eventDate", "")))
+            if m:
+                try:
+                    return datetime.date(*map(int, m.groups()))
+                except ValueError:
+                    return None
+    return None
+
+
+def ip_country(ip):
+    c = (rdap("ip", ip) or {}).get("country")
+    return c.upper() if isinstance(c, str) and re.fullmatch(r"[A-Za-z]{2}", c) else None
 
 
 def overused(host):
@@ -1326,10 +1879,13 @@ def http_get(ip, host):
     return int(m.group(1)), hdr
 
 
-def check(domain):
+def check(domain, neighbor_ips=None):
+    """neighbor_ips — адреса соседей, в чьих сертификатах найдено это имя (тогда правила строже)."""
     d = domain.strip().lower().rstrip(".")
-    r = {"domain": d, "ip": None, "verdict": OK, "reasons": [], "latency_ms": None, "tls13": None,
-         "alpn": None, "cert_ok": None, "x25519": None, "http_status": None, "cdn": None}
+    r = {"domain": d, "ip": None, "verdict": OK, "reasons": [], "notes": [], "latency_ms": None, "tls13": None,
+         "alpn": None, "cert_ok": None, "x25519": None, "http_status": None, "cdn": None,
+         "registered": None, "age_days": None, "country": None, "server_country": OPT.server_country,
+         "geoblock_ru": False}
 
     def bad(level, msg):
         r["reasons"].append(msg)
@@ -1341,9 +1897,22 @@ def check(domain):
 
     if d.startswith(("http://", "https://")):
         d = urlsplit(d).hostname or ""
-        r["domain"] = d
+    if d and not d.isascii():
+        try:
+            d = d.encode("idna").decode("ascii")
+        except UnicodeError:
+            pass
+    r["domain"] = d
     if not HOST_RE.match(d):
         bad(FAIL, "некорректное доменное имя (нужно вида www.example.de, без IP и пути)")
+        return done()
+    # репутация имени — офлайн, до любых соединений
+    tld = d.rsplit(".", 1)[-1]
+    if tld in SUSPICIOUS_TLDS:
+        bad(FAIL, f"дешёвая зона .{tld} — такие домены массово регистрируют под фишинг и чужие прокси")
+        return done()
+    if ru_segment(d) and OPT.server_country != "RU":
+        bad(FAIL, "российский сайт на зарубежном сервере выглядит неестественно и попадает под особый контроль ТСПУ")
         return done()
     try:
         ips = resolve4(d)
@@ -1353,6 +1922,13 @@ def check(domain):
         bad(FAIL, "нет DNS A-записи (домен не резолвится в IPv4)")
         return done()
     ip = r["ip"] = ips[0]
+    if neighbor_ips:
+        hit = [a for a in neighbor_ips if a in ips]
+        if not hit:
+            bad(FAIL, f"сосед {neighbor_ips[0]} выдаёт чужой сертификат (домен указывает на другой IP: "
+                      f"{', '.join(ips[:2])}) — скорее всего это чужой VPN/прокси")
+            return done()
+        ip = r["ip"] = hit[0]
     for a in ips:
         c = cdn_of(a)
         if c:
@@ -1425,16 +2001,43 @@ def check(domain):
                 bad(WARN, f"главная страница отвечает HTTP {st} (ожидался 2xx/3xx)")
         except (OSError, ssl.SSLError, ValueError) as e:
             bad(WARN, f"не удалось получить главную страницу ({net_reason(e) if isinstance(e, OSError) else e})")
+    if r["verdict"] == FAIL:
+        return done()
+
+    # 4) возраст домена (RDAP) — только для прошедших технические проверки, чтобы беречь бюджет
+    reg = domain_registered(d)
+    if reg:
+        age = (datetime.date.today() - reg).days
+        r["registered"], r["age_days"] = reg.isoformat(), age
+        if age < AGE_FAIL_DAYS:
+            bad(FAIL, f"домен зарегистрирован {reg.isoformat()} (моложе 2 лет) — одноразовые домены "
+                      "часто принадлежат мошенникам или чужим VPN")
+            return done()
+        if age < AGE_NOTE_DAYS:
+            r["notes"].append(f"домену ~{age // 365} г.")
+    elif neighbor_ips:
+        bad(WARN, "возраст домена не удалось проверить (имя взято у соседа)")
+    else:
+        r["notes"].append("возраст домена не удалось проверить")
+
+    # 5) география (мягко): страна IP сайта против страны сервера
+    if OPT.server_country:
+        cc = r["country"] = ip_country(ip)
+        if cc and cc != OPT.server_country:
+            r["notes"].append(f"сайт в {cc}, сервер в {OPT.server_country}")
+    if geoblocks_ru(d):
+        r["geoblock_ru"] = True
+        r["notes"].append("блок РФ: не открывается из РФ (Reality не мешает, но менее естественно)")
     return done()
 
 
 def summary(r):
+    notes = "; ".join(r.get("notes") or [])
     if r["reasons"]:
-        return r["reasons"][0] + (f" (+{len(r['reasons']) - 1})" if len(r["reasons"]) > 1 else "")
-    parts = ["TLS1.3", "h2", "X25519"]
-    if r.get("http_status"):
-        parts.append(f"HTTP {r['http_status']}")
-    return " ".join(parts)
+        s = r["reasons"][0] + (f" (+{len(r['reasons']) - 1})" if len(r["reasons"]) > 1 else "")
+    else:
+        s = " ".join(["TLS1.3", "h2", "X25519"] + ([f"HTTP {r['http_status']}"] if r.get("http_status") else []))
+    return f"{s}; {notes}" if notes else s
 
 
 def print_check(r, out=sys.stdout):
@@ -1442,6 +2045,8 @@ def print_check(r, out=sys.stdout):
     print(f"{r['domain']}: {r['verdict_name']}  (IP {r['ip'] or '—'}{lat})", file=out)
     for m in r["reasons"] or ["все проверки пройдены: TLS 1.3, h2, X25519, сертификат, HTTP"]:
         print(f"  - {m}", file=out)
+    for m in r.get("notes") or []:
+        print(f"  · примечание: {m}", file=out)
 
 
 # ---------- сканирование ----------
@@ -1501,7 +2106,9 @@ def cert_names(der):
     for n in names:
         n = n.lower().rstrip(".")
         if n.startswith("*."):
-            continue  # wildcard в SNI не подставить
+            # wildcard в SNI не подставить; пробуем конкретное www.<база> — в scan оно пройдёт, только
+            # если резолвится в IP этого же соседа
+            n = "www." + n[2:]
         if HOST_RE.match(n) and n not in out:
             out.append(n)
     return out
@@ -1530,10 +2137,27 @@ def neighbor_hosts(server_ip):
     return [str(h) for h in net.hosts() if h != a]
 
 
+def rank_key(r):
+    """Порядок в рейтинге: годные выше FAIL; свои/курируемые выше соседей; OK выше WARN;
+    сайты с блоком РФ ниже; дальше по задержке."""
+    lat = r["latency_ms"] if r.get("latency_ms") is not None else 10 ** 6
+    return (1 if r["verdict"] == FAIL else 0, 1 if r.get("neighbor") else 0, r["verdict"],
+            1 if r.get("geoblock_ru") else 0, lat, r["domain"])
+
+
+def visible(r):
+    """Строка попадает в таблицу: не FAIL; сосед — только с полностью чистым OK."""
+    return r["verdict"] != FAIL and (not r.get("neighbor") or r["verdict"] == OK)
+
+
 def scan(neighbors=None, candidates=None, quiet=False):
     t_start = time.monotonic()
     say = (lambda *_: None) if quiet else log
-    jobs = []  # (domain, source)
+    jobs = []  # (domain, source, neighbor_ips|None)
+    cand = candidates if candidates is not None else CANDIDATES
+    for d, cc in cand:  # курируемое/своё имя важнее «найденного у соседа»
+        if all(d != j[0] for j in jobs):
+            jobs.append((d, cc, None))
     if neighbors:
         try:
             hosts = neighbor_hosts(neighbors)
@@ -1543,38 +2167,45 @@ def scan(neighbors=None, candidates=None, quiet=False):
         if hosts:
             say(f"сканирую соседей {neighbors}/24 на порту {OPT.port} ({len(hosts)} адресов, до 30 с)…")
             pr = parallel(probe_neighbor, hosts, 64, time.monotonic() + 30)
-            found = 0
-            for v in pr.values():
-                if isinstance(v, tuple) and v[1]:
+            found, seen = 0, {}
+            for v in sorted((v for v in pr.values() if isinstance(v, tuple)), key=lambda v: ipaddress.ip_address(v[0])):
+                if v[1]:
                     found += 1
                     for n in v[1][:4]:
-                        if all(n != j[0] for j in jobs):
-                            jobs.append((n, f"сосед {v[0]}"))
-            say(f"соседи: TLS1.3+h2 отвечают {found}, имён для проверки {len(jobs)}")
-    for d, cc in (candidates if candidates is not None else CANDIDATES):
-        if all(d != j[0] for j in jobs):
-            jobs.append((d, cc))
+                        seen.setdefault(n, []).append(v[0])
+            known = {j[0] for j in jobs}
+            nn = [(n, f"сосед {ips[0]}", ips) for n, ips in seen.items() if n not in known]
+            jobs += nn
+            say(f"соседи: TLS1.3+h2 отвечают {found}, имён для проверки {len(nn)} "
+                "(годны, только если имя резолвится в IP соседа)")
+    if OPT.server_country:
+        say(f"страна сервера: {OPT.server_country}")
     say(f"проверяю {len(jobs)} сайтов (до 60 с)…")
-    res = parallel(lambda j: check(j[0]), jobs, 16, time.monotonic() + 60)
+    res = parallel(lambda j: check(j[0], j[2]), jobs, 16, time.monotonic() + 60)
     rows = []
-    for i, (d, src) in enumerate(jobs):
+    for i, (d, src, nips) in enumerate(jobs):
         r = res.get(i)
         if not isinstance(r, dict):
-            r = {"domain": d, "ip": None, "verdict": FAIL, "verdict_name": "FAIL", "latency_ms": None,
+            r = {"domain": d, "ip": None, "verdict": FAIL, "verdict_name": "FAIL", "latency_ms": None, "notes": [],
                  "reasons": ["проверка не уложилась во время" if r is None else f"ошибка проверки: {r}"]}
         r["source"] = src
-        r["neighbor"] = src.startswith("сосед")
+        r["neighbor"] = nips is not None
         rows.append(r)
-    rows.sort(key=lambda r: (0 if r["neighbor"] and r["verdict"] == OK else 1, r["verdict"],
-                             r["latency_ms"] if r["latency_ms"] is not None else 10 ** 6, r["domain"]))
+    rows.sort(key=rank_key)
     say(f"готово за {time.monotonic() - t_start:.0f} с")
     return rows
 
 
+LEGEND = ("  Сайт маскировки открывает сервер, а не браузер пользователя: если сайт не пускает посетителей из РФ\n"
+          "  («блок РФ»), Reality это не ломает, но для пользователей из РФ естественнее доступные им сайты —\n"
+          "  такие стоят выше. Соседи по /24 — только с подтверждённым DNS, ниже списка и не по умолчанию.")
+
+
 def print_table(rows, limit, out):
-    shown = [r for r in rows if r["verdict"] != FAIL][:limit]
-    failed = [r for r in rows if r["verdict"] == FAIL]
+    shown = [r for r in rows if visible(r)][:limit]
+    failed = sorted((r for r in rows if not visible(r)), key=lambda r: -r["verdict"])  # сначала FAIL
     if shown:
+        print(LEGEND, file=out)
         w = max(len(r["domain"]) for r in shown)
         ws = max(6, max(len(r["source"]) for r in shown))
         print(f"  {'#':>2}  {'домен'.ljust(w)}  {'откуда'.ljust(ws)}  итог  {'мс':>4}  примечание", file=out)
@@ -1616,10 +2247,10 @@ def pick(args):
         if cur and cur["verdict"] == OK:
             print(cur["domain"])
             return 0
-        best = next((r for r in rows if r["verdict"] == OK), None)
+        best = next((r for r in rows if r["verdict"] == OK and not r["neighbor"]), None)  # сосед — никогда
         print_table(rows, args.limit, sys.stderr)
         if not best:
-            log("нет ни одного сайта с итогом OK — укажите домен вручную (SNI=...)")
+            log("нет ни одного сайта из списка с итогом OK — укажите домен вручную (SNI=...)")
             return 2
         log(f"выбран автоматически: {best['domain']}")
         print(best["domain"])
@@ -1638,12 +2269,11 @@ def pick(args):
         return ln.strip()
 
     if cur and cur["verdict"] == WARN:  # текущий с замечаниями — на общих основаниях
-        rows = sorted(rows + [cur], key=lambda r: (0 if r["neighbor"] and r["verdict"] == OK else 1, r["verdict"],
-                                                   r["latency_ms"] if r["latency_ms"] is not None else 10 ** 6))
+        rows = sorted(rows + [cur], key=rank_key)
     shown = print_table(([cur] if cur and cur["verdict"] == OK else []) + rows, args.limit, tty)
     if cur and cur["verdict"] == FAIL:
         say(f"текущий {cur['domain']} больше не подходит: {'; '.join(cur['reasons'])}")
-    dflt = shown[0] if shown else None
+    dflt = next((r for r in shown if not r["neighbor"]), None)  # Enter никогда не выбирает соседа
     try:
         while True:
             hint = f"Enter = {dflt['domain']}" if dflt else "введите домен"
@@ -1687,6 +2317,8 @@ def main(argv=None):
     common.add_argument("--timeout", type=float, default=4.0)
     common.add_argument("--json", action="store_true")
     common.add_argument("--candidates", help="через запятую, вместо встроенного списка")
+    common.add_argument("--server-country", metavar="CC", help="страна сервера (иначе по RDAP для --neighbors)")
+    common.add_argument("--rdap-offline", action="store_true", help="не обращаться к RDAP")
     p = argparse.ArgumentParser(prog="sni.py", description="Подбор сайта маскировки для Xray REALITY")
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("check", parents=[common])
@@ -1705,6 +2337,17 @@ def main(argv=None):
             p.error(f"--resolve ожидает DOMAIN:IP, получено {item!r}")
         OPT.resolve[dom.lower()] = ip
     OPT.port, OPT.cafile, OPT.no_http, OPT.timeout = a.port, a.cafile, a.no_http, a.timeout
+    OPT.rdap_offline = a.rdap_offline
+    if a.server_country:
+        if not re.fullmatch(r"[A-Za-z]{2}", a.server_country):
+            p.error("--server-country ожидает двухбуквенный код страны, например DE")
+        OPT.server_country = a.server_country.upper()
+    elif getattr(a, "neighbors", None):
+        try:
+            ipaddress.ip_address(a.neighbors)
+            OPT.server_country = ip_country(a.neighbors)
+        except ValueError:
+            pass
     a.cand = None
     if a.candidates is not None:
         a.cand = [(d.strip().lower(), "свой список") for d in a.candidates.split(",") if d.strip()]
@@ -1737,13 +2380,102 @@ PYEOF
 }
 run_provision(){ # доп. переменные окружения передаются через env перед вызовом
   PANEL_URL="http://127.0.0.1:${P_PORT}/${P_PATH}" TOKEN_FILE="$STATE/api.token" STATE_DIR="$STATE/keys" \
-  XRAY_BIN="$XRAY_BIN" PUBLIC_IP="$PUBLIC_IP" USERS="$USERS" SNI="$SNI" \
+  XRAY_BIN="$XRAY_BIN" PUBLIC_IP="$PUBLIC_IP" USERS="$USERS" SNI="$SNI" FLAG="$(flag_of "${COUNTRY:-}")" \
   PORT_REALITY="$PORT_REALITY" PORT_SUDOKU="$PORT_SUDOKU" PORT_XHTTP="$PORT_XHTTP" \
     python3 -I "$STATE/provision.py"
 }
 publish_links(){
   cp "$STATE/keys/links.txt" "$STATE/links.txt"; chmod 600 "$STATE/links.txt"
   ops_links >/dev/null
+}
+# ---------- обновление 3X-UI с точкой отката ----------
+ver_gt(){ [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }
+xui_snapshot(){ # «теги inbound | число клиентов» прямо из базы (не зависит от API)
+  local t c
+  t=$(sqlite3 -readonly /etc/x-ui/x-ui.db "select tag from inbounds order by tag" 2>/dev/null | paste -sd, -) || true
+  c=$(sqlite3 -readonly /etc/x-ui/x-ui.db "select count(*) from clients" 2>/dev/null) || true
+  echo "${t}|${c:-?}"
+}
+xui_install_files(){ # xui_install_files КАТАЛОГ_С_x-ui — разложить файлы панели
+  rm -rf /usr/local/x-ui && cp -a "$1" /usr/local/x-ui
+  chmod +x /usr/local/x-ui/x-ui "$XRAY_BIN" /usr/local/x-ui/x-ui.sh
+  install -m 755 /usr/local/x-ui/x-ui.sh /usr/bin/x-ui
+  install -m 644 /usr/local/x-ui/x-ui.service.debian /etc/systemd/system/x-ui.service
+  install -d /var/log/x-ui
+  systemctl daemon-reload
+}
+xui_upgrade_prepare(){ # xui_upgrade_prepare СТАРАЯ_ВЕРСИЯ — бэкап + копия для отката, панель остановлена
+  XUI_RB="$STATE/rollback-$1"
+  echo "Обновляю панель 3X-UI: $1 → ${XUI_VERSION#v}."
+  echo "Сначала бэкап и точка отката: если новая версия не заработает, всё вернётся как было (VPN пропадёт на ~1 мин)."
+  ops_backup
+  xui_stop_wait
+  XUI_SNAP=$(xui_snapshot)
+  rm -rf "$STATE"/rollback-*; install -d -m 700 "$XUI_RB"
+  cp -a /usr/local/x-ui "$XUI_RB/x-ui" && cp -a /etc/x-ui "$XUI_RB/etc-x-ui" \
+    && cp -a /etc/systemd/system/x-ui.service "$STATE/api.token" "$STATE/auth.hdr" "$XUI_RB/" \
+    || { systemctl start x-ui 2>/dev/null || true; die "не удалось сохранить копию для отката — обновление отменено, панель не тронута"; }
+  echo "точка отката: $XUI_RB"
+}
+xui_stop_wait(){ # остановить панель и дождаться, пока процессы панели и Xray завершатся
+  local i
+  systemctl stop x-ui 2>/dev/null || true
+  for i in $(seq 1 20); do
+    pgrep -x x-ui >/dev/null 2>&1 || pgrep -f "[x]ray-linux-${ARCH}" >/dev/null 2>&1 || return 0
+    sleep 1
+  done
+  pkill -9 -x x-ui 2>/dev/null || true; pkill -9 -f "[x]ray-linux-${ARCH}" 2>/dev/null || true; sleep 1
+}
+xui_rollback(){ # xui_rollback ПРИЧИНА — вернуть старую версию и остановиться
+  trap - ERR
+  warn "новая версия 3X-UI не заработала: $1 — возвращаю прежнюю"
+  journalctl -u x-ui -n 30 --no-pager 2>/dev/null | tail -n 30 >&2 || true
+  xui_stop_wait
+  if rm -rf /etc/x-ui && cp -a "$XUI_RB/etc-x-ui" /etc/x-ui && xui_install_files "$XUI_RB/x-ui" \
+     && cp -a "$XUI_RB/x-ui.service" /etc/systemd/system/x-ui.service && systemctl daemon-reload \
+     && cp -a "$XUI_RB/api.token" "$XUI_RB/auth.hdr" "$STATE/"; then
+    systemctl restart x-ui 2>/dev/null || true
+    die "обновление 3X-UI отменено, возвращена версия ${XUI_RB##*rollback-} — VPN работает как раньше.
+  Ничего делать не нужно. Пришли эту ошибку и вывод выше — разберёмся."
+  fi
+  die "ОТКАТ НЕ УДАЛСЯ. Старая версия лежит в $XUI_RB, бэкап — в $STATE/backup.
+  Ничего не удаляй и пришли весь вывод — восстановим вручную."
+}
+xui_upgrade_verify(){ # после старта новой версии: те же inbound и клиенты, Xray запущен
+  local now i
+  now=$(xui_snapshot)
+  [ "$now" = "$XUI_SNAP" ] || xui_rollback "после обновления изменились inbound/клиенты (было: $XUI_SNAP, стало: $now)"
+  for i in $(seq 1 20); do pgrep -f "[x]ray-linux-${ARCH}" >/dev/null 2>&1 && break; sleep 1; done
+  pgrep -f "[x]ray-linux-${ARCH}" >/dev/null 2>&1 || xui_rollback "Xray не запустился"
+  echo "обновление 3X-UI прошло: inbound и клиенты на месте, Xray работает (копия старой версии: $XUI_RB)"
+}
+detect_country(){ # двухбуквенный код страны IP сервера (DE, FR…); пусто, если не удалось
+  local c=""
+  c=$(curl -fsS --max-time 8 "https://ipinfo.io/${PUBLIC_IP}/country" 2>/dev/null | tr -dc 'A-Za-z') || true
+  [ ${#c} = 2 ] || c=$(curl -fsS --max-time 8 "https://ipapi.co/${PUBLIC_IP}/country/" 2>/dev/null | tr -dc 'A-Za-z') || true
+  [ ${#c} = 2 ] || c=$(curl -fsS --max-time 8 "https://rdap.org/ip/${PUBLIC_IP}" 2>/dev/null \
+                        | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("country",""))' 2>/dev/null) || true
+  c=$(printf '%s' "$c" | tr 'a-z' 'A-Z'); [ ${#c} = 2 ] && echo "$c"
+  return 0
+}
+flag_of(){ # DE → 🇩🇪
+  python3 -I -c 'import sys; c=sys.argv[1].upper(); print("".join(chr(0x1F1E6+ord(x)-65) for x in c) if len(c)==2 and c.isalpha() else "")' "${1:-}"
+}
+install_cli(){ # короткая команда vpn-setup и подсказка при входе на сервер
+  [ -f "$STATE/install.sh" ] || return 0
+  ln -sfn "$STATE/install.sh" /usr/local/bin/vpn-setup
+  if [ -d /etc/update-motd.d ]; then
+    cat > /etc/update-motd.d/90-vpn-setup <<'MOTD'
+#!/bin/sh
+[ -f /root/vpn-setup/config.env ] || exit 0
+echo
+echo " VPN-сервер (vpn-setup). Команды:  vpn-setup status | vpn-setup panel | vpn-setup links | vpn-setup help"
+[ -f /etc/ssh/sshd_config.d/00-hardening.conf ] || echo " ! Вход по паролю включён. Когда войдёшь по ключу:  vpn-setup harden-ssh"
+[ -f /var/run/reboot-required ] && echo " ! Ожидают перезагрузки обновления безопасности:  reboot  (VPN пропадёт на 1–2 мин)"
+exit 0
+MOTD
+    chmod 755 /etc/update-motd.d/90-vpn-setup
+  fi
 }
 detect_public_ip(){
   local ip=""
@@ -1755,7 +2487,7 @@ detect_public_ip(){
 check_sni(){ # check_sni DOMAIN — проверка; SNI_SKIP_CHECK=1 — довериться пользователю
   local rc=0
   if [ "${SNI_SKIP_CHECK:-0}" = 1 ]; then warn "проверка сайта $1 пропущена по SNI_SKIP_CHECK=1"; return 0; fi
-  python3 -I "$STATE/sni.py" check "$1" >&2 || rc=$?
+  python3 -I "$STATE/sni.py" check ${COUNTRY:+--server-country "$COUNTRY"} "$1" >&2 || rc=$?
   case $rc in
     0) return 0 ;;
     1) warn "$1 прошёл с замечаниями (выше) — использую" ;;
@@ -1765,12 +2497,46 @@ check_sni(){ # check_sni DOMAIN — проверка; SNI_SKIP_CHECK=1 — до�
 choose_sni(){ # choose_sni [ЯВНЫЙ_ДОМЕН] — печатает выбранный домен
   local d="${1:-}"
   if [ -n "$d" ]; then check_sni "$d"; echo "$d"; return 0; fi
-  d=$(python3 -I "$STATE/sni.py" pick --neighbors "$PUBLIC_IP" ${SNI:+--default "$SNI"} | tail -n 1) || true
+  d=$(python3 -I "$STATE/sni.py" pick --neighbors "$PUBLIC_IP" ${COUNTRY:+--server-country "$COUNTRY"} ${SNI:+--default "$SNI"} | tail -n 1) || true
   [ -n "$d" ] || die "не удалось подобрать сайт маскировки. Задай вручную: SNI=www.example.de bash install.sh"
   echo "$d"
 }
 
 # ===================== подкоманды =====================
+panel_text(){ # инструкция по входу в панель через SSH-туннель с реальными значениями
+  local ip="${PUBLIC_IP:-IP_СЕРВЕРА}" sp
+  sp=$(detect_ssh_ports | awk '{print $1}') || true; sp=${sp:-22}
+  cat <<PANEL
+ПАНЕЛЬ 3X-UI. Снаружи она закрыта — это защита. Заходить только через SSH-туннель:
+туннель «пробрасывает» порт ${P_PORT} с сервера на твой компьютер, и панель открывается как локальная.
+
+Адрес в браузере (пока туннель включён):  http://127.0.0.1:${P_PORT}/${P_PATH}/
+Логин: ${P_USER}    Пароль: ${P_PASS}
+
+Как включить туннель — выбери один вариант:
+
+1) Windows / macOS / Linux — одна команда в терминале (PowerShell, Terminal):
+     ssh -N -L ${P_PORT}:127.0.0.1:${P_PORT} root@${ip} -p ${sp}
+   Окно не закрывай, пока работаешь с панелью. Остановить — Ctrl+C.
+   (Windows: если «ssh не найден» — Параметры → Приложения → Дополнительные компоненты → «Клиент OpenSSH».)
+
+2) MobaXterm (Windows):
+   Tunneling → New SSH tunnel → Local port forwarding;
+   My computer: порт ${P_PORT};  SSH server: ${ip}, пользователь root, порт ${sp} (+ значок ключа, если вход по ключу);
+   Remote server: 127.0.0.1, порт ${P_PORT}  →  Save → ▶ Start.
+
+3) PuTTY (Windows): Connection → SSH → Tunnels: Source port ${P_PORT}, Destination 127.0.0.1:${P_PORT}, Local → Add;
+   затем Session: ${ip}, порт ${sp} → Open и войди.
+
+4) Телефон — Termius (Android/iOS): Port Forwarding → New → Local; Local port ${P_PORT},
+   Host: этот сервер, Destination 127.0.0.1:${P_PORT} → подключиться, затем в браузере телефона адрес выше.
+
+Не работает? 1) туннель запущен и не закрыт; 2) адрес именно 127.0.0.1, порт ${P_PORT}, путь /${P_PATH}/;
+3) VPN-клиент в режиме TUN может перехватывать SSH — выключи его или добавь IP сервера в исключения.
+PANEL
+}
+cmd_panel(){ require_installed; load_config; panel_text; }
+
 cmd_precheck(){ # проверка ДО установки: доходят ли данные с домашнего ПК до этого IP
   [ "$(id -u)" = 0 ] || die "нужен root"
   local port="${1:-8080}" dir ip opened=0 busy
@@ -1800,6 +2566,7 @@ cmd_precheck(){ # проверка ДО установки: доходят ли 
 cmd_sni(){
   require_installed; load_config
   local new="${1:-}"
+  [ -z "${DOMAIN:-}" ] || die "сейчас включён свой домен ($DOMAIN). Вернуться к чужому сайту: vpn-setup domain off"
   write_helpers
   PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip || true)}
   step "Смена сайта маскировки Reality (сейчас: ${SNI:-не задан})"
@@ -1807,7 +2574,44 @@ cmd_sni(){
   echo "Выбрано: $SNI"
   SET_SNI="$SNI" run_provision
   save_config; publish_links
-  warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (bash $STATE/install.sh links)."
+  warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
+}
+
+cmd_domain(){ # vpn-setup domain ДОМЕН | off | (без аргумента — состояние)
+  require_installed; load_config
+  local arg="${1:-}" d
+  write_helpers
+  PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip || true)}
+  [ -n "$PUBLIC_IP" ] || die "не удалось определить внешний IPv4. Задай: PUBLIC_IP=x.x.x.x vpn-setup domain …"
+  case "$arg" in
+    "")
+      if [ -n "${DOMAIN:-}" ]; then echo "Свой домен: $DOMAIN (сайт: $DOMAIN_WWW_ROOT/$DOMAIN, Reality → 127.0.0.1:${DOMAIN_PORT:-?})"
+      else echo "Свой домен не включён. Сейчас Reality маскируется под: ${SNI:-?}"; fi
+      echo "Включить: vpn-setup domain example.com    Выключить: vpn-setup domain off"
+      ;;
+    off)
+      [ -n "${DOMAIN:-}" ] || { echo "свой домен и так не включён (SNI: ${SNI:-?})"; return 0; }
+      step "Выключаю свой домен $DOMAIN → обратно на чужой сайт маскировки"
+      SNI=$(choose_sni "${BORROWED_SNI:-}") || exit 1
+      SET_SNI="$SNI" run_provision
+      domain_disable
+      DOMAIN=""; DOMAIN_PORT=""; echo "$SNI" > "$STATE/sni"
+      save_config; publish_links
+      warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
+      ;;
+    *)
+      d=$(domain_normalize "$arg") || die "некорректное имя домена: $arg"
+      step "Свой домен для Reality: $d"
+      [ -n "${DOMAIN:-}" ] || BORROWED_SNI="${SNI:-}"
+      firewall_apply "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" 80
+      domain_setup "$d" "$PUBLIC_IP"
+      SET_SNI="$d" REALITY_TARGET="127.0.0.1:$DOMAIN_PORT" run_provision
+      DOMAIN="$d"; SNI="$d"; echo "$SNI" > "$STATE/sni"
+      save_config; publish_links
+      warn "Ссылки и QR профиля Reality изменились: раздай пользователям новые (vpn-setup links)."
+      echo "Сайт можно заменить своими файлами: $DOMAIN_WWW_ROOT/$d (vpn-setup его не перезапишет)."
+      ;;
+  esac
 }
 
 cmd_install(){
@@ -1817,7 +2621,7 @@ cmd_install(){
   . /etc/os-release
   [ "${ID:-}" = ubuntu ] || die "поддерживается только Ubuntu 22.04/24.04/26.04 (обнаружено: ${PRETTY_NAME:-?})"
   case "${VERSION_ID:-}" in 22.04|24.04|26.04) ;; *) warn "Ubuntu ${VERSION_ID:-?} не проверялась — продолжаю на свой риск";; esac
-  local ENV_SNI="${SNI:-}" ENV_USERS="${USERS:-}"
+  local ENV_SNI="${SNI:-}" ENV_USERS="${USERS:-}" ENV_COUNTRY_IN="${COUNTRY:-}" ENV_DOMAIN="${DOMAIN:-}"
   load_config
   if [ -n "$ENV_USERS" ]; then  # объединяем с уже существующими — старых не теряем
     USERS=$(printf '%s\n' ${USERS:-} $ENV_USERS | awk 'NF && !seen[$0]++' | xargs)
@@ -1885,21 +2689,24 @@ EOF
   echo "интерфейс ${IFACE}: IPv6 $([ -n "$V6" ] && echo off || echo оставлен), $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '?')"
 
   step "4/9 3X-UI ${XUI_VERSION}"
-  if [ ! -x /usr/local/x-ui/x-ui ] || ! /usr/local/x-ui/x-ui -v 2>/dev/null | grep -c "${XUI_VERSION#v}" >/dev/null; then
+  local XUI_CUR="" XUI_UPGRADED=0
+  if [ -x /usr/local/x-ui/x-ui ]; then XUI_CUR=$(/usr/local/x-ui/x-ui -v 2>/dev/null | tr -dc '0-9.\n' | sed -n 1p) || true; fi
+  if [ -n "$XUI_CUR" ] && ver_gt "$XUI_CUR" "${XUI_VERSION#v}"; then
+    warn "3X-UI уже новее ($XUI_CUR), чем проверенная скриптом ${XUI_VERSION#v} — видимо, нажали «Обновить» в панели.
+  Откатывать нельзя (база уже переделана под новую версию) — оставляю как есть. Проверь: vpn-setup status"
+  elif [ "$XUI_CUR" != "${XUI_VERSION#v}" ]; then
     local TMP; TMP=$(mktemp -d)
     curl -fsSL --retry 3 --connect-timeout 15 -o "$TMP/x-ui.tgz" \
       "https://github.com/MHSanaei/3x-ui/releases/download/${XUI_VERSION}/x-ui-linux-${ARCH}.tar.gz" \
       || die "не удалось скачать 3X-UI с GitHub (доступ к github.com с сервера?)"
     echo "${XUI_SHA256[$ARCH]}  $TMP/x-ui.tgz" | sha256sum -c --quiet - || die "контрольная сумма архива не совпала — установка остановлена"
     echo "контрольная сумма совпала"
-    systemctl stop x-ui 2>/dev/null || true
     tar xzf "$TMP/x-ui.tgz" -C "$TMP"
-    rm -rf /usr/local/x-ui && mv "$TMP/x-ui" /usr/local/x-ui && rm -rf "$TMP"
-    chmod +x /usr/local/x-ui/x-ui "$XRAY_BIN" /usr/local/x-ui/x-ui.sh
-    install -m 755 /usr/local/x-ui/x-ui.sh /usr/bin/x-ui
-    install -m 644 /usr/local/x-ui/x-ui.service.debian /etc/systemd/system/x-ui.service
-    install -d /var/log/x-ui
-    systemctl daemon-reload
+    if [ -n "$XUI_CUR" ] && [ -f /etc/x-ui/x-ui.db ] && [ -f "$STATE/panel.env" ]; then
+      xui_upgrade_prepare "$XUI_CUR"; XUI_UPGRADED=1
+    fi
+    xui_stop_wait
+    xui_install_files "$TMP/x-ui"; rm -rf "$TMP"
   fi
   "$XRAY_BIN" version 2>/dev/null | sed -n 1p
   if [ ! -f "$STATE/panel.env" ]; then
@@ -1911,9 +2718,14 @@ EOF
   fi
   # shellcheck disable=SC1091
   . "$STATE/panel.env"
-  /usr/local/x-ui/x-ui setting -listenIP 127.0.0.1 >/dev/null
-  ( umask 077; /usr/local/x-ui/x-ui setting -getApiToken -tokenName vpn-setup 2>/dev/null | awk '/apiToken:/{print $2}' > "$STATE/api.token" ) || true
-  [ -s "$STATE/api.token" ] || die "не удалось получить API-токен панели"
+  if [ "$XUI_UPGRADED" = 1 ]; then  # перенос базы на новую версию (один раз) — до старта службы
+    /usr/local/x-ui/x-ui migrate >/dev/null 2>&1 || xui_rollback "не удалось перенести базу на новую версию"
+  fi
+  /usr/local/x-ui/x-ui setting -listenIP 127.0.0.1 >/dev/null || { [ "$XUI_UPGRADED" = 1 ] && xui_rollback "панель не принимает настройки"; die "не удалось настроить панель"; }
+  local tscope=""; /usr/local/x-ui/x-ui setting -h 2>&1 | grep -c -- -tokenScope >/dev/null && tscope="-tokenScope admin"
+  # shellcheck disable=SC2086
+  ( umask 077; /usr/local/x-ui/x-ui setting -getApiToken -tokenName vpn-setup $tscope 2>/dev/null | awk '/apiToken:/{print $2}' > "$STATE/api.token" ) || true
+  [ -s "$STATE/api.token" ] || { [ "$XUI_UPGRADED" = 1 ] && xui_rollback "не выдан API-токен"; die "не удалось получить API-токен панели"; }
   ( umask 077; printf 'Authorization: Bearer %s\n' "$(cat "$STATE/api.token")" > "$STATE/auth.hdr" )
   systemctl enable x-ui >/dev/null 2>&1 || true
   systemctl restart x-ui
@@ -1922,34 +2734,49 @@ EOF
     if curl -fsS -o /dev/null -H @"$STATE/auth.hdr" "$url" 2>/dev/null; then ok=1; break; fi
     sleep 1
   done
-  [ "$ok" = 1 ] || { journalctl -u x-ui -n 20 --no-pager || true; die "панель не отвечает"; }
+  [ "$ok" = 1 ] || { [ "$XUI_UPGRADED" = 1 ] && xui_rollback "панель не отвечает"; journalctl -u x-ui -n 20 --no-pager || true; die "панель не отвечает"; }
+  [ "$XUI_UPGRADED" = 1 ] && xui_upgrade_verify
   echo "панель запущена на 127.0.0.1:${P_PORT} (снаружи недоступна)"
 
   step "5/9 Внешний IP и сайт маскировки Reality"
   PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip || true)}
   [ -n "$PUBLIC_IP" ] || die "не удалось определить внешний IPv4. Задай: PUBLIC_IP=x.x.x.x bash install.sh"
-  echo "IP сервера: $PUBLIC_IP"
+  [ -n "$ENV_COUNTRY_IN" ] && COUNTRY="$ENV_COUNTRY_IN"
+  [ -n "${COUNTRY:-}" ] || COUNTRY=$(detect_country)
+  echo "IP сервера: $PUBLIC_IP, страна: ${COUNTRY:-не определена} $(flag_of "${COUNTRY:-}")"
   write_helpers
   local OLD_SNI="${SNI:-}" SNI_CHANGED=0
-  if [ -n "$ENV_SNI" ]; then SNI=$(choose_sni "$ENV_SNI") || exit 1; [ -n "$OLD_SNI" ] && [ "$OLD_SNI" != "$SNI" ] && SNI_CHANGED=1
-  elif [ -n "${SNI:-}" ]; then echo "оставляю прежний сайт (сменить: bash $STATE/install.sh sni)"
+  if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != off ]; then
+    ENV_DOMAIN=$(domain_normalize "$ENV_DOMAIN") || die "некорректное имя домена в DOMAIN="
+    [ -n "${DOMAIN:-}" ] || BORROWED_SNI="${SNI:-}"
+    DOMAIN="$ENV_DOMAIN"
+  fi
+  if [ -n "${DOMAIN:-}" ]; then
+    domain_name_check "$DOMAIN"; domain_dns_check "$DOMAIN" "$PUBLIC_IP"
+    SNI="$DOMAIN"; echo "свой домен: Reality маскируется под собственный сайт $DOMAIN (выключить: vpn-setup domain off)"
+  elif [ -n "$ENV_SNI" ]; then SNI=$(choose_sni "$ENV_SNI") || exit 1; [ -n "$OLD_SNI" ] && [ "$OLD_SNI" != "$SNI" ] && SNI_CHANGED=1
+  elif [ -n "${SNI:-}" ]; then echo "оставляю прежний сайт (сменить: vpn-setup sni)"
   else SNI=$(choose_sni) || exit 1; fi
   echo "SNI: $SNI"; echo "$SNI" > "$STATE/sni"
   save_config
 
   step "6/9 Firewall и fail2ban"
-  firewall_apply "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP"
+  firewall_apply "$PORT_REALITY" "$PORT_SUDOKU" "$PORT_XHTTP" ${DOMAIN:+80}
   fail2ban_apply
+  if [ -n "${DOMAIN:-}" ]; then domain_setup "$DOMAIN" "$PUBLIC_IP"; save_config; fi
 
   step "7/9 Inbound'ы и пользователи"
-  run_provision
-  if [ "$SNI_CHANGED" = 1 ]; then SET_SNI="$SNI" run_provision; warn "сайт маскировки сменён: ссылки Reality изменились"; fi
+  REALITY_TARGET="${DOMAIN:+127.0.0.1:${DOMAIN_PORT:-}}" run_provision
+  if [ -n "${DOMAIN:-}" ]; then SET_SNI="$DOMAIN" REALITY_TARGET="127.0.0.1:$DOMAIN_PORT" run_provision
+  elif [ "$SNI_CHANGED" = 1 ]; then SET_SNI="$SNI" run_provision; warn "сайт маскировки сменён: ссылки Reality изменились"; fi
 
   step "8/9 QR-коды, бэкапы"
   publish_links
   ops_backup
   if [ -f "$STATE/install.sh" ]; then ops_install_backup_cron
   else warn "ежедневный бэкап не включён: нет копии скрипта. Скачай: curl -fsSL $SELF_URL -o $STATE/install.sh и запусти: bash $STATE/install.sh"; fi
+
+  install_cli
 
   step "9/9 Проверка"
   local rc=0
@@ -1959,23 +2786,21 @@ EOF
 vpn-setup ${SCRIPT_VERSION}   Сервер: ${PUBLIC_IP}   SNI Reality: ${SNI}   3X-UI: ${XUI_VERSION}
 Профили:  Reality-XHTTP :${PORT_REALITY}  |  Sudoku-VLESSenc :${PORT_SUDOKU}  |  XHTTP-VLESSenc :${PORT_XHTTP}
 
-Панель (только через SSH-туннель):
-  MobaXterm → Tunneling → Local port forwarding: ${P_PORT} → 127.0.0.1:${P_PORT} через ${PUBLIC_IP}
-  Браузер: http://127.0.0.1:${P_PORT}/${P_PATH}/
-  Логин: ${P_USER}   Пароль: ${P_PASS}
+$(panel_text)
 
 Файлы: ссылки ${STATE}/links.txt   QR ${STATE}/qr/   ключи ${STATE}/keys/   бэкапы ${STATE}/backup/ (ежедневно)
-Команды: bash ${STATE}/install.sh help
+Команды: vpn-setup help    (или bash ${STATE}/install.sh help)
 EOF
   chmod 600 "$STATE/README.txt"
 
   echo
   if [ "$rc" = 0 ]; then echo -e "${c_ok}ГОТОВО.${c_no}"; else echo -e "${c_warn}ГОТОВО С ЗАМЕЧАНИЯМИ — см. проверку выше.${c_no}"; fi
-  echo "Логин панели, туннель, файлы: cat $STATE/README.txt"
+  echo "Как зайти в панель (нужен SSH-туннель):  vpn-setup panel"
+  echo "Всё про сервер (логины, файлы):  cat $STATE/README.txt      Команды:  vpn-setup help"
   echo "Скачай через SFTP папку $STATE/qr и файл $STATE/links.txt — это секреты."
   echo "Проверь с домашнего ПК без VPN, что сервер доступен:  curl -s -o NUL -w \"%{http_code}\" http://${PUBLIC_IP}:${PORT_XHTTP}/   (ожидается 404)"
   if [ ! -f /etc/ssh/sshd_config.d/00-hardening.conf ]; then
-    warn "Вход по паролю ещё включён. Зайди по ключу в НОВОЙ сессии, затем: bash $STATE/install.sh harden-ssh"
+    warn "Вход по паролю ещё включён. Зайди по ключу в НОВОЙ сессии, затем выполни:  vpn-setup harden-ssh"
   fi
 }
 
@@ -2003,7 +2828,9 @@ case "${1:-install}" in
   install)      cmd_install ;;
   harden-ssh)   [ "$(id -u)" = 0 ] || die "нужен root"; harden_ssh ;;
   sni)          [ "$(id -u)" = 0 ] || die "нужен root"; cmd_sni "${2:-}" ;;
+  domain)       [ "$(id -u)" = 0 ] || die "нужен root"; cmd_domain "${2:-}" ;;
   precheck)     cmd_precheck "${2:-}" ;;
+  panel|tunnel) cmd_panel ;;
   status)       require_installed; load_config; ops_status || exit 1 ;;
   links)        require_installed; load_config; ops_links "${2:-}" ;;
   backup)       require_installed; load_config; ops_backup "${2:-}" ;;

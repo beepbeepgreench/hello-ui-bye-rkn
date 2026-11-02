@@ -8,33 +8,76 @@
   sni.py pick [--neighbors IP] [--default DOMAIN] интерактивный выбор; домен — последней строкой stdout
 
 Общие флаги (для тестов): --resolve DOMAIN:IP (можно несколько), --port N, --cafile PATH,
-  --no-http, --timeout S, --candidates a,b,c (заменить встроенный список), --non-interactive.
+  --no-http, --timeout S, --candidates a,b,c (заменить встроенный список), --non-interactive,
+  --server-country CC (страна сервера; иначе — по RDAP для --neighbors), --rdap-offline (без RDAP).
+  SNI_RDAP_FILE=fixture.json — ответы RDAP из файла вместо сети:
+    {"domain": {"example.de": {RDAP-ответ}}, "ip": {"1.2.3.4": {"country": "DE"}}}
+
+Строгие правила: соседи по /24 — только если имя из сертификата резолвится в IP этого соседа
+  (иначе это чужой Reality/прокси) и никогда не по умолчанию; дешёвые TLD, домены моложе 2 лет
+  (RDAP) и российский сегмент на зарубежном сервере — FAIL.
 """
-import argparse, ipaddress, json, os, queue, re, shutil, socket, ssl, subprocess, sys, tempfile, threading, time
-from urllib.parse import urlsplit
+import argparse, datetime, ipaddress, json, os, queue, re, shutil, socket, ssl, subprocess, sys, tempfile, threading, time
+import urllib.error, urllib.request
+from urllib.parse import quote, urlsplit
 
 OK, WARN, FAIL = 0, 1, 2
 VNAME = {OK: "OK", WARN: "WARN", FAIL: "FAIL"}
 LATENCY_WARN_MS = 150
 
-# Скучные, посещаемые, неполитические сайты; страна — для подсказки. Всё проверяется на лету,
-# CDN-фронтированные отсеются проверкой, так что список намеренно с запасом.
+# Скучные, посещаемые, неполитические сайты на собственной инфраструктуре (не Akamai/CloudFront —
+# заведомо CDN-фронтированные убраны); страна — для подсказки. Всё равно проверяется на лету.
+# Предпочтение — сайтам, привычным посетителям из РФ (магазины электроники/инструмента, почта,
+# железные дороги, финские магазины, которые знали жители Петербурга) и в DE/FI рядом с типичными VPS.
 CANDIDATES = [
-    ("www.lidl.de", "DE"), ("www.otto.de", "DE"), ("www.dhl.de", "DE"), ("www.rewe.de", "DE"),
-    ("www.bahn.de", "DE"), ("www.kaufland.de", "DE"), ("www.dm.de", "DE"), ("www.hornbach.de", "DE"),
-    ("www.ah.nl", "NL"), ("www.ns.nl", "NL"), ("www.postnl.nl", "NL"), ("www.jumbo.com", "NL"),
-    ("www.s-kanava.fi", "FI"), ("www.k-ruoka.fi", "FI"), ("www.posti.fi", "FI"), ("www.vr.fi", "FI"),
+    ("www.otto.de", "DE"), ("www.lidl.de", "DE"), ("www.hornbach.de", "DE"), ("www.thomann.de", "DE"),
+    ("www.reichelt.de", "DE"), ("www.conrad.de", "DE"), ("www.alternate.de", "DE"), ("www.chefkoch.de", "DE"),
+    ("www.idealo.de", "DE"), ("www.heise.de", "DE"), ("www.kaufland.de", "DE"), ("www.dm.de", "DE"),
+    ("www.verkkokauppa.com", "FI"), ("www.gigantti.fi", "FI"), ("www.tokmanni.fi", "FI"), ("www.motonet.fi", "FI"),
+    ("www.s-kanava.fi", "FI"), ("www.posti.fi", "FI"), ("www.vr.fi", "FI"), ("www.k-ruoka.fi", "FI"),
+    ("www.postnl.nl", "NL"), ("www.coolblue.nl", "NL"),
     ("www.ica.se", "SE"), ("www.postnord.se", "SE"), ("www.sj.se", "SE"),
-    ("www.inpost.pl", "PL"), ("www.intercity.pl", "PL"), ("www.pkobp.pl", "PL"), ("www.biedronka.pl", "PL"),
-    ("www.carrefour.fr", "FR"), ("www.laposte.fr", "FR"), ("www.leroymerlin.fr", "FR"),
     ("www.billa.at", "AT"), ("www.oebb.at", "AT"), ("www.post.at", "AT"),
-    ("www.alza.cz", "CZ"), ("www.cd.cz", "CZ"), ("www.seznam.cz", "CZ"),
-    ("www.rimi.ee", "EE"), ("www.omniva.ee", "EE"),
-    ("www.rimi.lv", "LV"), ("www.airbaltic.com", "LV"),
-    ("www.maxima.lt", "LT"), ("www.post.lt", "LT"),
-    ("www.esselunga.it", "IT"), ("www.poste.it", "IT"), ("www.trenitalia.com", "IT"),
-    ("www.mercadona.es", "ES"), ("www.renfe.com", "ES"), ("www.correos.es", "ES"),
+    ("www.seznam.cz", "CZ"), ("www.mapy.cz", "CZ"), ("www.alza.cz", "CZ"), ("www.cd.cz", "CZ"),
+    ("www.inpost.pl", "PL"), ("www.intercity.pl", "PL"), ("www.x-kom.pl", "PL"),
+    ("www.rimi.ee", "EE"), ("www.omniva.ee", "EE"), ("www.rimi.lv", "LV"),
+    ("www.post.lt", "LT"), ("www.maxima.lt", "LT"),
+    ("www.correos.es", "ES"), ("www.mercadona.es", "ES"),
 ]
+
+# Сайты, которые отказывают посетителям из РФ (geo-block). Reality это не ломает (сайт открывает
+# сервер, а не браузер пользователя), но для пользователей из РФ такая маскировка менее естественна.
+# Сравнение по регистрируемому домену.
+GEOBLOCK_RU = frozenset({"dm.de", "maxima.lt"})
+
+# Дешёвые/«одноразовые» TLD: регистрируют массово под фишинг, спам и чужие панели — FAIL.
+SUSPICIOUS_TLDS = frozenset(
+    "fun site xyz top shop online click icu buzz cyou monster rest lol quest sbs cfd bond beauty hair "
+    "skin makeup boats homes yachts mom autos motorcycles".split())
+
+# Российский сегмент: на зарубежном сервере выглядит неестественно и под особым контролем ТСПУ.
+RU_TLDS = frozenset({"ru", "su", "xn--p1ai"})                       # xn--p1ai = .рф
+RU_BRANDS = frozenset({"vk", "vkontakte", "vkuser", "userapi", "odnoklassniki", "yandex", "yastatic"})
+
+# Зарезервированные TLD (RFC 2606/6761 и локальные) — RDAP по ним не спрашиваем.
+RESERVED_TLDS = frozenset({"test", "example", "invalid", "localhost", "local", "internal", "lan", "home", "arpa"})
+
+# Мини-подмножество Public Suffix List: двухуровневые суффиксы. Остальное — одноуровневый TLD
+# (+ эвристика «co./com./… в двухбуквенной зоне», см. registrable()).
+MULTI_SUFFIXES = frozenset("""
+co.uk org.uk me.uk ltd.uk plc.uk ac.uk gov.uk net.uk com.au net.au org.au edu.au gov.au id.au
+co.nz net.nz org.nz co.jp ne.jp or.jp ac.jp co.za com.br net.br com.tr net.tr org.tr
+com.ua org.ua net.ua in.ua kiev.ua com.pl net.pl org.pl waw.pl com.cn net.cn org.cn com.hk com.tw
+co.kr or.kr com.sg com.my co.in net.in org.in co.id co.il org.il com.mx com.ar co.at or.at com.gr
+com.cy com.mt com.ro co.hu com.ee com.lv com.pt com.es msk.ru spb.ru com.ru net.ru org.ru com.by
+co.th com.vn com.ph com.pk com.eg com.sa""".split())
+
+# RDAP: возраст домена и страна IP. Таймаут на запрос, общий бюджет на прогон, не больше 4 параллельно.
+RDAP_URL = "https://rdap.org"
+RDAP_TIMEOUT = 5.0
+RDAP_BUDGET = 25.0
+AGE_FAIL_DAYS = 2 * 365
+AGE_NOTE_DAYS = 5 * 365
 
 # Имена, которые используют все подряд: их SNI на чужом IP — заметный признак.
 OVERUSED = ("microsoft", "apple", "icloud", "google", "gstatic", "youtube", "yahoo", "amazon", "aws",
@@ -67,7 +110,8 @@ CDN_HEADERS = [("server", r"cloudflare", "Cloudflare"), ("cf-ray", r".", "Cloudf
 _2LD = {"co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "gv"}
 HOST_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
-OPT = argparse.Namespace(resolve={}, port=443, cafile=None, no_http=False, timeout=4.0)
+OPT = argparse.Namespace(resolve={}, port=443, cafile=None, no_http=False, timeout=4.0,
+                         server_country=None, rdap_offline=False)
 
 
 def log(msg=""):
@@ -84,9 +128,107 @@ def cdn_of(ip):
 
 def registrable(host):
     lab = host.lower().rstrip(".").split(".")
-    if len(lab) >= 3 and lab[-2] in _2LD and len(lab[-1]) == 2:
+    if len(lab) >= 3 and (".".join(lab[-2:]) in MULTI_SUFFIXES or (lab[-2] in _2LD and len(lab[-1]) == 2)):
         return ".".join(lab[-3:])
     return ".".join(lab[-2:])
+
+
+def ru_segment(host):
+    lab = host.lower().rstrip(".").split(".")
+    return lab[-1] in RU_TLDS or registrable(host).split(".")[0] in RU_BRANDS
+
+
+def geoblocks_ru(host):
+    return registrable(host) in GEOBLOCK_RU
+
+
+# ---------- RDAP (возраст домена, страна IP) ----------
+
+_RDAP = {"cache": {}, "lock": threading.Lock(), "sem": threading.Semaphore(4), "deadline": None,
+         "off": False, "fx": None, "fx_loaded": False}
+
+
+def _rdap_fixture():
+    """Содержимое SNI_RDAP_FILE (dict) или None, если переменная не задана."""
+    with _RDAP["lock"]:
+        if not _RDAP["fx_loaded"]:
+            _RDAP["fx_loaded"] = True
+            path = os.environ.get("SNI_RDAP_FILE")
+            if path:
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        _RDAP["fx"] = json.load(f)
+                except (OSError, ValueError) as e:
+                    log(f"SNI_RDAP_FILE: не прочитан ({e}) — RDAP отключён")
+                    _RDAP["fx"] = {}
+        return _RDAP["fx"]
+
+
+def _rdap_fetch(kind, key):
+    fx = _rdap_fixture()
+    if fx is not None:  # режим фикстуры: сеть не трогаем вовсе
+        v = (fx.get(kind) or {}).get(key)
+        return v if isinstance(v, dict) else None
+    if OPT.rdap_offline or _RDAP["off"]:
+        return None
+    if kind == "domain" and key.rsplit(".", 1)[-1] in RESERVED_TLDS:
+        return None
+    if kind == "ip":
+        try:
+            if not ipaddress.ip_address(key).is_global:
+                return None
+        except ValueError:
+            return None
+    with _RDAP["sem"]:
+        now = time.monotonic()
+        with _RDAP["lock"]:
+            if _RDAP["deadline"] is None:
+                _RDAP["deadline"] = now + RDAP_BUDGET
+            left = _RDAP["deadline"] - now
+        if left < 1 or _RDAP["off"]:
+            return None
+        req = urllib.request.Request(f"{RDAP_URL}/{kind}/{quote(key)}", headers={
+            "Accept": "application/rdap+json, application/json", "User-Agent": "sni.py (reality target check)"})
+        try:
+            with urllib.request.urlopen(req, timeout=min(RDAP_TIMEOUT, left)) as resp:
+                data = json.loads(resp.read(1 << 20).decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429:  # rate limit — больше не долбим в этом прогоне
+                _RDAP["off"] = True
+            return None
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+            return None
+    return data if isinstance(data, dict) else None
+
+
+def rdap(kind, key):
+    ck = (kind, key)
+    with _RDAP["lock"]:
+        if ck in _RDAP["cache"]:
+            return _RDAP["cache"][ck]
+    v = _rdap_fetch(kind, key)
+    with _RDAP["lock"]:
+        _RDAP["cache"][ck] = v
+    return v
+
+
+def domain_registered(host):
+    """Дата регистрации регистрируемого домена (datetime.date) по RDAP или None."""
+    j = rdap("domain", registrable(host))
+    for ev in (j or {}).get("events") or []:
+        if isinstance(ev, dict) and ev.get("eventAction") == "registration":
+            m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(ev.get("eventDate", "")))
+            if m:
+                try:
+                    return datetime.date(*map(int, m.groups()))
+                except ValueError:
+                    return None
+    return None
+
+
+def ip_country(ip):
+    c = (rdap("ip", ip) or {}).get("country")
+    return c.upper() if isinstance(c, str) and re.fullmatch(r"[A-Za-z]{2}", c) else None
 
 
 def overused(host):
@@ -223,10 +365,13 @@ def http_get(ip, host):
     return int(m.group(1)), hdr
 
 
-def check(domain):
+def check(domain, neighbor_ips=None):
+    """neighbor_ips — адреса соседей, в чьих сертификатах найдено это имя (тогда правила строже)."""
     d = domain.strip().lower().rstrip(".")
-    r = {"domain": d, "ip": None, "verdict": OK, "reasons": [], "latency_ms": None, "tls13": None,
-         "alpn": None, "cert_ok": None, "x25519": None, "http_status": None, "cdn": None}
+    r = {"domain": d, "ip": None, "verdict": OK, "reasons": [], "notes": [], "latency_ms": None, "tls13": None,
+         "alpn": None, "cert_ok": None, "x25519": None, "http_status": None, "cdn": None,
+         "registered": None, "age_days": None, "country": None, "server_country": OPT.server_country,
+         "geoblock_ru": False}
 
     def bad(level, msg):
         r["reasons"].append(msg)
@@ -238,9 +383,22 @@ def check(domain):
 
     if d.startswith(("http://", "https://")):
         d = urlsplit(d).hostname or ""
-        r["domain"] = d
+    if d and not d.isascii():
+        try:
+            d = d.encode("idna").decode("ascii")
+        except UnicodeError:
+            pass
+    r["domain"] = d
     if not HOST_RE.match(d):
         bad(FAIL, "некорректное доменное имя (нужно вида www.example.de, без IP и пути)")
+        return done()
+    # репутация имени — офлайн, до любых соединений
+    tld = d.rsplit(".", 1)[-1]
+    if tld in SUSPICIOUS_TLDS:
+        bad(FAIL, f"дешёвая зона .{tld} — такие домены массово регистрируют под фишинг и чужие прокси")
+        return done()
+    if ru_segment(d) and OPT.server_country != "RU":
+        bad(FAIL, "российский сайт на зарубежном сервере выглядит неестественно и попадает под особый контроль ТСПУ")
         return done()
     try:
         ips = resolve4(d)
@@ -250,6 +408,13 @@ def check(domain):
         bad(FAIL, "нет DNS A-записи (домен не резолвится в IPv4)")
         return done()
     ip = r["ip"] = ips[0]
+    if neighbor_ips:
+        hit = [a for a in neighbor_ips if a in ips]
+        if not hit:
+            bad(FAIL, f"сосед {neighbor_ips[0]} выдаёт чужой сертификат (домен указывает на другой IP: "
+                      f"{', '.join(ips[:2])}) — скорее всего это чужой VPN/прокси")
+            return done()
+        ip = r["ip"] = hit[0]
     for a in ips:
         c = cdn_of(a)
         if c:
@@ -322,16 +487,43 @@ def check(domain):
                 bad(WARN, f"главная страница отвечает HTTP {st} (ожидался 2xx/3xx)")
         except (OSError, ssl.SSLError, ValueError) as e:
             bad(WARN, f"не удалось получить главную страницу ({net_reason(e) if isinstance(e, OSError) else e})")
+    if r["verdict"] == FAIL:
+        return done()
+
+    # 4) возраст домена (RDAP) — только для прошедших технические проверки, чтобы беречь бюджет
+    reg = domain_registered(d)
+    if reg:
+        age = (datetime.date.today() - reg).days
+        r["registered"], r["age_days"] = reg.isoformat(), age
+        if age < AGE_FAIL_DAYS:
+            bad(FAIL, f"домен зарегистрирован {reg.isoformat()} (моложе 2 лет) — одноразовые домены "
+                      "часто принадлежат мошенникам или чужим VPN")
+            return done()
+        if age < AGE_NOTE_DAYS:
+            r["notes"].append(f"домену ~{age // 365} г.")
+    elif neighbor_ips:
+        bad(WARN, "возраст домена не удалось проверить (имя взято у соседа)")
+    else:
+        r["notes"].append("возраст домена не удалось проверить")
+
+    # 5) география (мягко): страна IP сайта против страны сервера
+    if OPT.server_country:
+        cc = r["country"] = ip_country(ip)
+        if cc and cc != OPT.server_country:
+            r["notes"].append(f"сайт в {cc}, сервер в {OPT.server_country}")
+    if geoblocks_ru(d):
+        r["geoblock_ru"] = True
+        r["notes"].append("блок РФ: не открывается из РФ (Reality не мешает, но менее естественно)")
     return done()
 
 
 def summary(r):
+    notes = "; ".join(r.get("notes") or [])
     if r["reasons"]:
-        return r["reasons"][0] + (f" (+{len(r['reasons']) - 1})" if len(r["reasons"]) > 1 else "")
-    parts = ["TLS1.3", "h2", "X25519"]
-    if r.get("http_status"):
-        parts.append(f"HTTP {r['http_status']}")
-    return " ".join(parts)
+        s = r["reasons"][0] + (f" (+{len(r['reasons']) - 1})" if len(r["reasons"]) > 1 else "")
+    else:
+        s = " ".join(["TLS1.3", "h2", "X25519"] + ([f"HTTP {r['http_status']}"] if r.get("http_status") else []))
+    return f"{s}; {notes}" if notes else s
 
 
 def print_check(r, out=sys.stdout):
@@ -339,6 +531,8 @@ def print_check(r, out=sys.stdout):
     print(f"{r['domain']}: {r['verdict_name']}  (IP {r['ip'] or '—'}{lat})", file=out)
     for m in r["reasons"] or ["все проверки пройдены: TLS 1.3, h2, X25519, сертификат, HTTP"]:
         print(f"  - {m}", file=out)
+    for m in r.get("notes") or []:
+        print(f"  · примечание: {m}", file=out)
 
 
 # ---------- сканирование ----------
@@ -398,7 +592,9 @@ def cert_names(der):
     for n in names:
         n = n.lower().rstrip(".")
         if n.startswith("*."):
-            continue  # wildcard в SNI не подставить
+            # wildcard в SNI не подставить; пробуем конкретное www.<база> — в scan оно пройдёт, только
+            # если резолвится в IP этого же соседа
+            n = "www." + n[2:]
         if HOST_RE.match(n) and n not in out:
             out.append(n)
     return out
@@ -427,10 +623,27 @@ def neighbor_hosts(server_ip):
     return [str(h) for h in net.hosts() if h != a]
 
 
+def rank_key(r):
+    """Порядок в рейтинге: годные выше FAIL; свои/курируемые выше соседей; OK выше WARN;
+    сайты с блоком РФ ниже; дальше по задержке."""
+    lat = r["latency_ms"] if r.get("latency_ms") is not None else 10 ** 6
+    return (1 if r["verdict"] == FAIL else 0, 1 if r.get("neighbor") else 0, r["verdict"],
+            1 if r.get("geoblock_ru") else 0, lat, r["domain"])
+
+
+def visible(r):
+    """Строка попадает в таблицу: не FAIL; сосед — только с полностью чистым OK."""
+    return r["verdict"] != FAIL and (not r.get("neighbor") or r["verdict"] == OK)
+
+
 def scan(neighbors=None, candidates=None, quiet=False):
     t_start = time.monotonic()
     say = (lambda *_: None) if quiet else log
-    jobs = []  # (domain, source)
+    jobs = []  # (domain, source, neighbor_ips|None)
+    cand = candidates if candidates is not None else CANDIDATES
+    for d, cc in cand:  # курируемое/своё имя важнее «найденного у соседа»
+        if all(d != j[0] for j in jobs):
+            jobs.append((d, cc, None))
     if neighbors:
         try:
             hosts = neighbor_hosts(neighbors)
@@ -440,38 +653,45 @@ def scan(neighbors=None, candidates=None, quiet=False):
         if hosts:
             say(f"сканирую соседей {neighbors}/24 на порту {OPT.port} ({len(hosts)} адресов, до 30 с)…")
             pr = parallel(probe_neighbor, hosts, 64, time.monotonic() + 30)
-            found = 0
-            for v in pr.values():
-                if isinstance(v, tuple) and v[1]:
+            found, seen = 0, {}
+            for v in sorted((v for v in pr.values() if isinstance(v, tuple)), key=lambda v: ipaddress.ip_address(v[0])):
+                if v[1]:
                     found += 1
                     for n in v[1][:4]:
-                        if all(n != j[0] for j in jobs):
-                            jobs.append((n, f"сосед {v[0]}"))
-            say(f"соседи: TLS1.3+h2 отвечают {found}, имён для проверки {len(jobs)}")
-    for d, cc in (candidates if candidates is not None else CANDIDATES):
-        if all(d != j[0] for j in jobs):
-            jobs.append((d, cc))
+                        seen.setdefault(n, []).append(v[0])
+            known = {j[0] for j in jobs}
+            nn = [(n, f"сосед {ips[0]}", ips) for n, ips in seen.items() if n not in known]
+            jobs += nn
+            say(f"соседи: TLS1.3+h2 отвечают {found}, имён для проверки {len(nn)} "
+                "(годны, только если имя резолвится в IP соседа)")
+    if OPT.server_country:
+        say(f"страна сервера: {OPT.server_country}")
     say(f"проверяю {len(jobs)} сайтов (до 60 с)…")
-    res = parallel(lambda j: check(j[0]), jobs, 16, time.monotonic() + 60)
+    res = parallel(lambda j: check(j[0], j[2]), jobs, 16, time.monotonic() + 60)
     rows = []
-    for i, (d, src) in enumerate(jobs):
+    for i, (d, src, nips) in enumerate(jobs):
         r = res.get(i)
         if not isinstance(r, dict):
-            r = {"domain": d, "ip": None, "verdict": FAIL, "verdict_name": "FAIL", "latency_ms": None,
+            r = {"domain": d, "ip": None, "verdict": FAIL, "verdict_name": "FAIL", "latency_ms": None, "notes": [],
                  "reasons": ["проверка не уложилась во время" if r is None else f"ошибка проверки: {r}"]}
         r["source"] = src
-        r["neighbor"] = src.startswith("сосед")
+        r["neighbor"] = nips is not None
         rows.append(r)
-    rows.sort(key=lambda r: (0 if r["neighbor"] and r["verdict"] == OK else 1, r["verdict"],
-                             r["latency_ms"] if r["latency_ms"] is not None else 10 ** 6, r["domain"]))
+    rows.sort(key=rank_key)
     say(f"готово за {time.monotonic() - t_start:.0f} с")
     return rows
 
 
+LEGEND = ("  Сайт маскировки открывает сервер, а не браузер пользователя: если сайт не пускает посетителей из РФ\n"
+          "  («блок РФ»), Reality это не ломает, но для пользователей из РФ естественнее доступные им сайты —\n"
+          "  такие стоят выше. Соседи по /24 — только с подтверждённым DNS, ниже списка и не по умолчанию.")
+
+
 def print_table(rows, limit, out):
-    shown = [r for r in rows if r["verdict"] != FAIL][:limit]
-    failed = [r for r in rows if r["verdict"] == FAIL]
+    shown = [r for r in rows if visible(r)][:limit]
+    failed = sorted((r for r in rows if not visible(r)), key=lambda r: -r["verdict"])  # сначала FAIL
     if shown:
+        print(LEGEND, file=out)
         w = max(len(r["domain"]) for r in shown)
         ws = max(6, max(len(r["source"]) for r in shown))
         print(f"  {'#':>2}  {'домен'.ljust(w)}  {'откуда'.ljust(ws)}  итог  {'мс':>4}  примечание", file=out)
@@ -513,10 +733,10 @@ def pick(args):
         if cur and cur["verdict"] == OK:
             print(cur["domain"])
             return 0
-        best = next((r for r in rows if r["verdict"] == OK), None)
+        best = next((r for r in rows if r["verdict"] == OK and not r["neighbor"]), None)  # сосед — никогда
         print_table(rows, args.limit, sys.stderr)
         if not best:
-            log("нет ни одного сайта с итогом OK — укажите домен вручную (SNI=...)")
+            log("нет ни одного сайта из списка с итогом OK — укажите домен вручную (SNI=...)")
             return 2
         log(f"выбран автоматически: {best['domain']}")
         print(best["domain"])
@@ -535,12 +755,11 @@ def pick(args):
         return ln.strip()
 
     if cur and cur["verdict"] == WARN:  # текущий с замечаниями — на общих основаниях
-        rows = sorted(rows + [cur], key=lambda r: (0 if r["neighbor"] and r["verdict"] == OK else 1, r["verdict"],
-                                                   r["latency_ms"] if r["latency_ms"] is not None else 10 ** 6))
+        rows = sorted(rows + [cur], key=rank_key)
     shown = print_table(([cur] if cur and cur["verdict"] == OK else []) + rows, args.limit, tty)
     if cur and cur["verdict"] == FAIL:
         say(f"текущий {cur['domain']} больше не подходит: {'; '.join(cur['reasons'])}")
-    dflt = shown[0] if shown else None
+    dflt = next((r for r in shown if not r["neighbor"]), None)  # Enter никогда не выбирает соседа
     try:
         while True:
             hint = f"Enter = {dflt['domain']}" if dflt else "введите домен"
@@ -584,6 +803,8 @@ def main(argv=None):
     common.add_argument("--timeout", type=float, default=4.0)
     common.add_argument("--json", action="store_true")
     common.add_argument("--candidates", help="через запятую, вместо встроенного списка")
+    common.add_argument("--server-country", metavar="CC", help="страна сервера (иначе по RDAP для --neighbors)")
+    common.add_argument("--rdap-offline", action="store_true", help="не обращаться к RDAP")
     p = argparse.ArgumentParser(prog="sni.py", description="Подбор сайта маскировки для Xray REALITY")
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("check", parents=[common])
@@ -602,6 +823,17 @@ def main(argv=None):
             p.error(f"--resolve ожидает DOMAIN:IP, получено {item!r}")
         OPT.resolve[dom.lower()] = ip
     OPT.port, OPT.cafile, OPT.no_http, OPT.timeout = a.port, a.cafile, a.no_http, a.timeout
+    OPT.rdap_offline = a.rdap_offline
+    if a.server_country:
+        if not re.fullmatch(r"[A-Za-z]{2}", a.server_country):
+            p.error("--server-country ожидает двухбуквенный код страны, например DE")
+        OPT.server_country = a.server_country.upper()
+    elif getattr(a, "neighbors", None):
+        try:
+            ipaddress.ip_address(a.neighbors)
+            OPT.server_country = ip_country(a.neighbors)
+        except ValueError:
+            pass
     a.cand = None
     if a.candidates is not None:
         a.cand = [(d.strip().lower(), "свой список") for d in a.candidates.split(",") if d.strip()]

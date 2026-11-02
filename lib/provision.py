@@ -17,6 +17,8 @@ TOKEN = pathlib.Path(E["TOKEN_FILE"]).read_text().strip()
 STATE = pathlib.Path(E["STATE_DIR"])
 XRAY = E["XRAY_BIN"]
 SET_SNI = E.get("SET_SNI", "").strip().lower().rstrip(".")
+# Свой домен: Reality пересылает «чужих» на локальный nginx (127.0.0.1:PORT) вместо SNI:443
+REALITY_TARGET = E.get("REALITY_TARGET", "").strip()
 
 
 def die(msg):
@@ -113,13 +115,16 @@ def set_sni(dom):
     if stream.get("security") != "reality" or not isinstance(rs, dict):
         die("inbound vpn-reality не использует REALITY — менять SNI нечего")
     was = rs.get("serverNames") or []
-    if rs.get("target") == f"{dom}:443" and was == [dom]:
+    tgt = REALITY_TARGET or f"{dom}:443"
+    if rs.get("target") == tgt and was == [dom]:
         print(f"SNI: уже {dom} (inbound id {iid}), изменений нет")
     else:
-        rs["target"], rs["serverNames"] = f"{dom}:443", [dom]
+        was_tgt = rs.get("target")
+        rs["target"], rs["serverNames"] = tgt, [dom]
         body = dict(old, streamSettings=json.dumps(stream) if isinstance(raw, str) else stream)
         api("POST", f"/panel/api/inbounds/update/{iid}", body)
-        print(f"SNI: {', '.join(was) or '—'} → {dom} (inbound id {iid})")
+        print(f"SNI: {', '.join(was) or '—'} → {dom} (inbound id {iid})"
+              + (f", target {was_tgt} → {tgt}" if was_tgt != tgt else ""))
 
         def rollback(err):
             api("POST", f"/panel/api/inbounds/update/{iid}", old)
@@ -150,24 +155,40 @@ SNIFF = json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "m
 XHTTP_BASE = {"mode": "auto", "host": "", "headers": {}, "noSSEHeader": False, "xPaddingBytes": "100-1000",
               "scMaxEachPostBytes": "1000000", "scMaxBufferedPosts": 30, "scStreamUpServerSecs": "20-80"}
 
+FLAG = E.get("FLAG", "").strip()
+def remark(base):
+    return f"{FLAG} {base}" if FLAG else base
+
+
+def set_remark(iid, want):
+    """Переименовать inbound (флаг страны в названии); меняется только remark."""
+    old = api("GET", f"/panel/api/inbounds/get/{iid}")
+    if old.get("remark") == want:
+        return False
+    old.pop("clientStats", None)
+    api("POST", f"/panel/api/inbounds/update/{iid}", dict(old, remark=want))
+    print(f"inbound id {iid}: название → {want}")
+    return True
+
+
 INBOUNDS = [
-    {"tag": "vpn-reality", "remark": "Reality-XHTTP", "port": P_REALITY,
+    {"tag": "vpn-reality", "remark": remark("Reality-XHTTP"), "port": P_REALITY,
      "settings": {"clients": [], "decryption": "none", "fallbacks": []},
      "stream": {"network": "xhttp", "security": "reality",
                 "xhttpSettings": dict(XHTTP_BASE, path=p_reality),
-                "realitySettings": {"show": False, "xver": 0, "target": f"{SNI}:443", "serverNames": [SNI],
+                "realitySettings": {"show": False, "xver": 0, "target": REALITY_TARGET or f"{SNI}:443", "serverNames": [SNI],
                                     "privateKey": reality["private"], "shortIds": [sid],
                                     "minClientVer": "", "maxClientVer": "", "maxTimediff": 0,
                                     "settings": {"publicKey": reality["public"], "fingerprint": "firefox",
                                                  "serverName": "", "spiderX": "/"}}}},
-    {"tag": "vpn-sudoku", "remark": "Sudoku-VLESSenc", "port": P_SUDOKU,
+    {"tag": "vpn-sudoku", "remark": remark("Sudoku-VLESSenc"), "port": P_SUDOKU,
      "settings": {"clients": [], "decryption": venc["decryption"], "encryption": venc["encryption"]},
      "stream": {"network": "tcp", "security": "none",
                 "tcpSettings": {"acceptProxyProtocol": False, "header": {"type": "none"}},
                 "finalmask": {"tcp": [{"type": "sudoku", "settings": {
                     "password": sudoku_pw, "ascii": "", "customTable": "", "customTables": [],
                     "paddingMin": 0, "paddingMax": 0}}]}}},
-    {"tag": "vpn-xhttp", "remark": "XHTTP-VLESSenc", "port": P_XHTTP,
+    {"tag": "vpn-xhttp", "remark": remark("XHTTP-VLESSenc"), "port": P_XHTTP,
      "settings": {"clients": [], "decryption": venc["decryption"], "encryption": venc["encryption"]},
      "stream": {"network": "xhttp", "security": "none", "xhttpSettings": dict(XHTTP_BASE, path=p_xhttp)}},
 ]
@@ -192,6 +213,7 @@ for d in INBOUNDS:
     if d["tag"] in existing:
         ib = existing[d["tag"]]
         ids.append(ib["id"])
+        set_remark(ib["id"], d["remark"])
         if not ib.get("enable", True):
             api("POST", f"/panel/api/inbounds/setEnable/{ib['id']}", {"enable": True})
             print(f"inbound {d['tag']}: был выключен — включаю (id {ib['id']})")

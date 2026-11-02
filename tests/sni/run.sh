@@ -36,6 +36,30 @@ leaf rel rel.test
 leaf cross cross.test
 leaf slow slow.test
 leaf forbid forbid.test
+leaf impostor real.test          # сосед .12 выдаёт сертификат real.test, а real.test → .13 (чужой VPN)
+leaf young young.test            # домен «моложе 2 лет» по RDAP-фикстуре
+leaf anon anon.test              # нет в RDAP-фикстуре → возраст неизвестен
+leaf cheap bratan.fun            # дешёвая зона
+leaf wild '*.wild.test'          # wildcard: годится www.wild.test, т.к. резолвится в этого соседа
+leaf ru vk.ru                    # российский сегмент
+
+# ---------- RDAP-фикстура (сеть не трогаем) ----------
+$PY -I - "$T/rdap.json" <<'PYEOF'
+import datetime, json, sys
+d = lambda days: {"events": [{"eventAction": "last changed", "eventDate": "2025-01-01T00:00:00Z"},
+                  {"eventAction": "registration",
+                   "eventDate": (datetime.date.today() - datetime.timedelta(days=days)).isoformat() + "T10:00:00Z"}]}
+old = d(20 * 365)
+fx = {"domain": {n: old for n in ("good.test", "other.test", "nox.test", "cross.test", "apple.test", "slow.test",
+                                  "forbid.test", "tls12.test", "noh2.test", "wild.test", "real.test", "cdn.test",
+                                  "fastly.test", "wrong.test", "closed.test")},
+      "ip": {"127.0.0.1": {"country": "FI"}, "127.0.0.2": {"country": "DE"}, "127.0.0.5": {"country": "FI"}}}
+fx["domain"]["rel.test"] = d(3 * 365 + 30)
+fx["domain"]["young.test"] = d(100)
+fx["domain"]["vk.ru"] = old
+json.dump(fx, open(sys.argv[1], "w"))
+PYEOF
+export SNI_RDAP_FILE="$T/rdap.json"
 
 # ---------- серверы (все на одном порту, разные 127.0.0.x — это же «соседи по /24») ----------
 srv(){ openssl s_server -quiet -www -accept "$1:$P" -cert "$T/$2.crt" -key "$T/$2.key" "${@:3}" </dev/null >/dev/null 2>&1 & PIDS+=($!); }
@@ -49,15 +73,23 @@ fx 127.0.0.8  rel    301 /de/
 fx 127.0.0.9  cross  302 https://shop.elsewhere.example/
 fx 127.0.0.10 slow   200 --delay 0.3
 fx 127.0.0.11 forbid 403
-# 127.0.0.7 — закрытый порт
+srv 127.0.0.12 impostor -tls1_3 -alpn h2
+srv 127.0.0.14 young    -tls1_3 -alpn h2
+srv 127.0.0.15 anon     -tls1_3 -alpn h2
+srv 127.0.0.16 cheap    -tls1_3 -alpn h2
+srv 127.0.0.17 wild     -tls1_3 -alpn h2
+srv 127.0.0.18 ru       -tls1_3 -alpn h2
+# 127.0.0.7 и 127.0.0.13 — закрытый порт
+UP="2 3 4 5 6 8 9 10 11 12 14 15 16 17 18"
 for _ in $(seq 1 50); do
-  n=0; for a in 2 3 4 5 6 8 9 10 11; do (exec 3<>"/dev/tcp/127.0.0.$a/$P") 2>/dev/null && n=$((n+1)); done
-  [ "$n" -eq 9 ] && break; sleep 0.2
+  n=0; for a in $UP; do (exec 3<>"/dev/tcp/127.0.0.$a/$P") 2>/dev/null && n=$((n+1)); done
+  [ "$n" -eq 15 ] && break; sleep 0.2
 done
 
 R="--port $P --cafile $T/ca.crt --timeout 3"
 for m in good.test:2 www.good.test:2 www.apple.test:2 tls12.test:3 noh2.test:4 other.test:5 wrong.test:5 \
-         nox.test:6 closed.test:7 rel.test:8 cross.test:9 slow.test:10 forbid.test:11; do
+         nox.test:6 closed.test:7 rel.test:8 cross.test:9 slow.test:10 forbid.test:11 \
+         real.test:13 young.test:14 anon.test:15 bratan.fun:16 www.wild.test:17 vk.ru:18; do
   R="$R --resolve ${m%%:*}:127.0.0.${m##*:}"
 done
 R="$R --resolve cdn.test:104.16.1.1 --resolve fastly.test:151.101.1.1"
@@ -87,6 +119,42 @@ expect forbid.test      1 "HTTP 403"
 expect forbid.test      0 ": OK" --no-http
 expect 1.2.3.4          2 "некорректное доменное имя"
 expect nonexistent.invalid 2 "нет DNS A-записи"
+echo "== check: репутация домена"
+expect bratan.fun       2 "дешёвая зона .fun"
+expect wlya.drumllles.site 2 "дешёвая зона .site"
+expect vk.ru            2 "российский сайт на зарубежном сервере"
+expect sub.vk.com       2 "российский сайт"
+expect yandex.de        2 "российский сайт"
+expect сайт.рф          2 "российский сайт"
+out=$($SNI check vk.ru $R --server-country RU 2>&1)
+! grep -q "российский" <<<"$out" && grep -q ": OK" <<<"$out" && ok "check vk.ru --server-country RU → правило РФ не срабатывает" || ko "vk.ru RU: $out"
+expect young.test       2 "моложе 2 лет"
+expect rel.test         0 "домену ~3 г\\."
+expect anon.test        0 "возраст домена не удалось проверить"
+out=$(SNI_RDAP_FILE= $SNI check good.test $R --rdap-offline 2>&1); rc=$?
+[ $rc = 0 ] && grep -q "возраст домена не удалось проверить" <<<"$out" && ok "check --rdap-offline → OK + примечание" || ko "rdap-offline: $rc $out"
+expect good.test        0 "сайт в DE, сервер в FI" --server-country FI
+js=$($SNI check young.test $R --json)
+$PY -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["age_days"]==100 and d["registered"], d' "$js" \
+  && ok "check --json: registered/age_days из RDAP" || ko "young json: $js"
+# юнит-проверки чистых функций
+$PY -I - "$ROOT/lib/sni.py" <<'PYEOF' && ok "юнит: registrable/ru_segment/geoblock/rank_key/TLD-список" || ko "юнит"
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("sni", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+assert m.registrable("www.bbc.co.uk") == "bbc.co.uk" and m.registrable("a.b.example.com.au") == "example.com.au"
+assert m.registrable("www.dm.de") == "dm.de" and m.registrable("x.y.github.io") == "github.io"
+assert m.ru_segment("mail.ru") and m.ru_segment("ok.ru") and m.ru_segment("vkontakte.com") and m.ru_segment("m.vk.me")
+assert not m.ru_segment("www.lidl.de") and not m.ru_segment("vkusno.de")
+assert m.geoblocks_ru("www.dm.de") and m.geoblocks_ru("www.maxima.lt") and not m.geoblocks_ru("www.otto.de")
+for t in "fun site xyz top shop online click icu buzz cyou monster rest lol quest sbs cfd bond beauty hair skin makeup boats homes yachts mom autos motorcycles".split():
+    assert t in m.SUSPICIOUS_TLDS, t
+base = dict(verdict=0, neighbor=False, geoblock_ru=False, latency_ms=50, domain="a")
+rows = [dict(base, domain="nb", neighbor=True, latency_ms=1), dict(base, domain="geo", geoblock_ru=True, latency_ms=2),
+        dict(base, domain="far", latency_ms=90), dict(base, domain="warn", verdict=1, latency_ms=3),
+        dict(base, domain="bad", verdict=2, latency_ms=1)]
+assert [r["domain"] for r in sorted(rows, key=m.rank_key)] == ["far", "geo", "warn", "nb", "bad"], sorted(rows, key=m.rank_key)
+assert len(m.CANDIDATES) >= 35 and not any(m.ru_segment(d) or d.rsplit(".", 1)[-1] in m.SUSPICIOUS_TLDS for d, _ in m.CANDIDATES)
+PYEOF
 out=$($SNI check good.test --port "$P" --resolve good.test:127.0.0.2 --timeout 3 2>&1); rc=$?
 [ $rc = 2 ] && grep -q "доверенными центрами" <<<"$out" && ok "check good.test без --cafile → 2 (чужой CA)" || ko "без cafile: $rc $out"
 js=$($SNI check good.test $R --json); rc=$?
@@ -100,7 +168,10 @@ out=$($SNI scan --neighbors 127.0.0.1 --candidates tls12.test,cdn.test,www.apple
 dt=$(( $(date +%s) - t0 ))
 echo "$out" | sed 's/^/        /'; sed 's/^/        [stderr] /' "$T/scan.err"
 first=$(awk '$1=="1"{print $2" "$3}' <<<"$out")
-[[ $first == *" сосед" ]] && ok "scan: #1 — сосед, прошедший проверку ($first)" || ko "scan: #1 не сосед: $first"
+[[ $first != *" сосед" ]] && ok "scan: #1 — из своего списка, не сосед ($first)" || ko "scan: #1 сосед: $first"
+grep -Eq "^ +[0-9]+ +good.test +сосед 127.0.0.2 +OK .*сайт в DE, сервер в FI" <<<"$out" && ok "scan: сосед good.test (DNS совпал) в таблице с гео-примечанием" || ko "scan: good.test сосед"
+grep -q "страна сервера: FI" "$T/scan.err" && ok "scan: страна сервера по RDAP для --neighbors" || ko "scan: страна сервера"
+! grep -Eq "^ +[0-9]+ +(anon.test|real.test|young.test|bratan.fun|vk.ru) " <<<"$out" && ok "scan: подозрительные соседи не попали в таблицу" || ko "scan: подозрительные в таблице"
 grep -q "other.test" <<<"$out" && ok "scan: имя other.test найдено в сертификате соседа .5" || ko "scan: other.test не найден"
 grep -Eq "^ +[0-9]+ +www.apple.test .*WARN" <<<"$out" && ok "scan: www.apple.test в таблице с WARN" || ko "scan: apple"
 grep -q "отброшено.*tls12.test" <<<"$out" && grep -q "cdn.test" <<<"$out" && ok "scan: FAIL-кандидаты отброшены" || ko "scan: отброшенные"
@@ -108,10 +179,21 @@ grep -q "отброшено.*tls12.test" <<<"$out" && grep -q "cdn.test" <<<"$ou
 js=$($SNI scan --neighbors 127.0.0.1 --candidates tls12.test $R --json 2>/dev/null)
 $PY -c '
 import json,sys; rows=json.loads(sys.argv[1]); v=[r["verdict"] for r in rows]
-n=[r for r in rows if r["neighbor"]]; assert rows[0]["neighbor"] and rows[0]["verdict"]==0, rows[0]
-names={r["domain"] for r in n}; assert {"good.test","other.test","nox.test","rel.test"} <= names, names
+n=[r for r in rows if r["neighbor"]]; assert any(r["verdict"]==0 for r in n), n
+names={r["domain"] for r in n}; assert {"good.test","other.test","nox.test","rel.test","www.wild.test"} <= names, names
 assert all(r["verdict"]==2 for r in rows if r["domain"] in ("nox.test","tls12.test","cross.test")), rows
-' "$js" && ok "scan --json: ранжирование и вердикты соседей" || ko "scan --json"
+by={r["domain"]: r for r in rows}
+def rs(d): return " ".join(by[d]["reasons"])
+assert by["real.test"]["verdict"]==2 and "чужой сертификат" in rs("real.test") and "чужой VPN/прокси" in rs("real.test"), by["real.test"]
+assert by["young.test"]["verdict"]==2 and "моложе 2 лет" in rs("young.test"), by["young.test"]
+assert by["anon.test"]["verdict"]==1 and "возраст домена не удалось проверить" in rs("anon.test"), by["anon.test"]
+assert by["bratan.fun"]["verdict"]==2 and "дешёвая зона" in rs("bratan.fun")
+assert by["vk.ru"]["verdict"]==2 and "российский" in rs("vk.ru")
+assert by["www.wild.test"]["verdict"]==0 and by["www.wild.test"]["neighbor"], by["www.wild.test"]
+assert by["good.test"]["verdict"]==0 and by["good.test"]["server_country"]=="FI" and by["good.test"]["country"]=="DE"
+# порядок: годные не-соседи → соседи → FAIL
+k=[(r["verdict"]==2, r["neighbor"]) for r in rows]; assert k==sorted(k), k
+' "$js" && ok "scan --json: чужой сертификат/молодой/дешёвый/РФ → FAIL, неизвестный возраст соседа → WARN, wildcard, порядок" || ko "scan --json"
 
 # ---------- pick: не интерактивно ----------
 echo "== pick (без tty)"
@@ -123,6 +205,10 @@ d=$(setsid -w $SNI pick --candidates tls12.test,cdn.test,www.apple.test $R </dev
 [ $rc = 2 ] && [ -z "$d" ] && ok "pick без OK-вариантов → код 2, stdout пуст" || ko "pick none: rc=$rc '$d'"
 d=$($SNI pick --non-interactive --candidates good.test $R 2>/dev/null); rc=$?
 [ $rc = 0 ] && [ "$d" = "good.test" ] && ok "pick --non-interactive → $d" || ko "pick --non-interactive: $rc '$d'"
+d=$(setsid -w $SNI pick --neighbors 127.0.0.1 --candidates tls12.test,www.apple.test $R </dev/null 2>/dev/null); rc=$?
+[ $rc = 2 ] && [ -z "$d" ] && ok "pick без tty: OK-соседи есть, но автоматически сосед не выбирается → код 2" || ko "pick neighbors-only: rc=$rc '$d'"
+d=$(setsid -w $SNI pick --neighbors 127.0.0.1 --candidates slow.test,www.good.test $R </dev/null 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ "$d" = "www.good.test" ] && ok "pick без tty с соседями → из списка: $d" || ko "pick neighbors+list: rc=$rc '$d'"
 
 # ---------- pick: интерактивно через pty ----------
 echo "== pick (pty)"
@@ -143,6 +229,17 @@ d=$(cat "$T/pick3.out"); want=$(awk '$1=="2"{print $2}' "$T/pick3.tty" | head -1
 steps='[["Enter = ","good.test"]]'
 $PY -I tests/sni/pty_pick.py "$T/pick4.out" "$steps" -- $PY -I lib/sni.py pick --candidates rel.test $R >"$T/pick4.tty" 2>&1; rc=$?
 [ $rc = 0 ] && [ "$(cat "$T/pick4.out")" = "good.test" ] && [ "$(wc -l < "$T/pick4.out")" = 1 ] && ok "pty: свой OK-домен принят, stdout ровно одна строка" || ko "pty 4: rc=$rc"
+
+steps='[["Enter = ",""],["Использовать? [y/N]","y"]]'
+$PY -I tests/sni/pty_pick.py "$T/pick5.out" "$steps" -- $PY -I lib/sni.py pick --neighbors 127.0.0.1 --candidates www.apple.test,tls12.test $R >"$T/pick5.tty" 2>&1; rc=$?
+if [ $rc = 0 ] && [ "$(cat "$T/pick5.out")" = "www.apple.test" ] && grep -q "Enter = www.apple.test" "$T/pick5.tty" \
+   && grep -Eq "^ +1 +www.apple.test" "$T/pick5.tty" && grep -Eq "good.test +сосед" "$T/pick5.tty" && grep -q "блок РФ" "$T/pick5.tty"; then
+  ok "pty: с соседями Enter = не сосед (WARN из списка + подтверждение), легенда показана"
+else ko "pty 5: rc=$rc '$(cat "$T/pick5.out")'"; sed 's/^/        /' "$T/pick5.tty"; fi
+steps='[["введите домен","good.test"]]'
+$PY -I tests/sni/pty_pick.py "$T/pick6.out" "$steps" -- $PY -I lib/sni.py pick --neighbors 127.0.0.1 --candidates tls12.test $R >"$T/pick6.tty" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(cat "$T/pick6.out")" = "good.test" ] && grep -Eq "good.test +сосед" "$T/pick6.tty" \
+  && ok "pty: в списке только соседи → нет значения по умолчанию, домен вводится вручную" || { ko "pty 6: rc=$rc"; sed 's/^/        /' "$T/pick6.tty"; }
 
 echo "== итог: PASS $pass, FAIL $fail"
 [ "$fail" = 0 ]

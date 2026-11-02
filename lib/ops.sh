@@ -142,7 +142,7 @@ ops_status(){
   if [ "$st" = active ]; then _ops_mark ok "служба x-ui: active"; else _ops_mark fail "служба x-ui: ${st:-нет данных} (journalctl -u x-ui -n 30)"; fi
 
   name=$(basename "$XRAY_BIN"); name=${name:0:15}
-  out=$(pgrep -x -- "$name" 2>/dev/null | head -n1) || out=""
+  out=$(pgrep -x -- "$name" 2>/dev/null | head -n1) || true
   if [ -n "$out" ]; then _ops_mark ok "процесс Xray запущен (pid $out)"; else _ops_mark fail "процесс Xray ($name) не найден"; fi
 
   if [ ! -x "$XRAY_BIN" ]; then
@@ -208,16 +208,16 @@ ops_status(){
   fi
 
   install -d -m 755 /run/sshd 2>/dev/null || true
-  out=$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2; exit}') || out=""
+  out=$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2; exit}') || true
   case "$out" in
     no)  _ops_mark ok "SSH: вход по паролю выключен";;
-    yes) _ops_mark warn "SSH: вход по паролю ВКЛЮЧЁН (после проверки входа по ключу: bash install.sh harden-ssh)";;
+    yes) _ops_mark warn "SSH: вход по паролю ВКЛЮЧЁН — после проверки входа по ключу выполни: vpn-setup harden-ssh";;
     *)   _ops_mark warn "SSH: не удалось определить (sshd -T)";;
   esac
 
   if [ -f /var/run/reboot-required ]; then
     l=$(sort -u /var/run/reboot-required.pkgs 2>/dev/null | tr '\n' ' ') || l=""
-    _ops_mark warn "нужна перезагрузка${l:+ (пакеты: ${l% })}"
+    _ops_mark warn "нужна перезагрузка: обновления безопасности${l:+ (${l% })} вступят в силу после команды reboot. VPN пропадёт на 1–2 мин — лучше ночью"
   else
     _ops_mark ok "перезагрузка не требуется"
   fi
@@ -244,7 +244,7 @@ ops_status(){
 
   out=$(find "$STATE/backup" -maxdepth 1 -type f \( -name 'vpn-*.tgz' -o -name 'x-ui-*.db' \) -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n1) || out=""
   if [ -z "$out" ]; then
-    _ops_mark warn "бэкапов нет: bash install.sh backup"
+    _ops_mark warn "бэкапов нет: vpn-setup backup"
   else
     p=${out%%.*}; l=$(( ($(date +%s) - p) / 3600 ))
     if [ "$l" -gt 48 ]; then _ops_mark warn "последний бэкап $((l / 24)) дн. назад: ${out#* }"
@@ -253,10 +253,15 @@ ops_status(){
   if [ -f "$CRON_FILE" ]; then _ops_mark ok "ежедневный бэкап по cron: включён"
   else _ops_mark warn "ежедневный бэкап по cron не настроен"; fi
 
-  out=$(timeout 10 "$XUI_DIR/x-ui" -v 2>/dev/null | head -n1) || out=""
-  l=$(timeout 10 "$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2; exit}') || l=""
+  out=$(timeout 10 "$XUI_DIR/x-ui" -v 2>/dev/null | head -n1) || true
+  l=$(timeout 10 "$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2; exit}') || true
   if [ -n "$out" ] && [ -n "$l" ]; then
-    if [ -n "${XUI_VERSION:-}" ] && [ "$out" != "${XUI_VERSION#v}" ]; then _ops_mark warn "версии: 3X-UI $out (ожидалась ${XUI_VERSION#v}), Xray $l"
+    if [ -n "${XUI_VERSION:-}" ] && [ "$out" != "${XUI_VERSION#v}" ]; then
+      if [ "$(printf '%s\n%s\n' "$out" "${XUI_VERSION#v}" | sort -V | tail -n 1)" = "${XUI_VERSION#v}" ]; then
+        _ops_mark warn "версии: 3X-UI $out устарела (скрипт ставит ${XUI_VERSION#v}) — обнови: vpn-setup (с бэкапом и автооткатом)"
+      else
+        _ops_mark warn "версии: 3X-UI $out новее проверенной ${XUI_VERSION#v} (обновили кнопкой в панели?) — работает, не трогай; кнопку «Обновить» больше не жми"
+      fi
     else _ops_mark ok "версии: 3X-UI $out, Xray $l"; fi
   else
     _ops_mark warn "версии: 3X-UI ${out:-?}, Xray ${l:-?}"
@@ -274,6 +279,8 @@ ops_status(){
     if [ "$out" = 1 ] && [ -z "$l" ]; then _ops_mark ok "IPv6: отключён"
     else _ops_mark warn "IPv6 не отключён (default.disable_ipv6=${out:-?}${l:+, адреса: ${l% }})"; fi
   fi
+
+  if declare -F domain_status >/dev/null; then domain_status; fi
 
   echo
   if [ "$_OPS_FAIL" = 0 ]; then echo -e "${c_ok:-}Критичных проблем нет.${c_no:-}"; return 0; fi
@@ -310,6 +317,8 @@ ops_links(){ # ops_links [USER]
         echo "$line"
         if [ "$qr" = 1 ]; then
           n=${line##*#}; if [ "$n" = "$line" ]; then n=""; fi
+          n=${n#%F0%9F%87%[A-F0-9][A-F0-9]%F0%9F%87%[A-F0-9][A-F0-9]%20}   # флаг страны в названии → убрать из имени файла
+          [ -n "${COUNTRY:-}" ] && n="${COUNTRY}_${n}"
           n=${n//[^A-Za-z0-9_-]/_}; n=${n:0:64}; [ -n "$n" ] || n="link"
           if [ -n "${used[$n]:-}" ]; then used[$n]=$(( used[$n] + 1 )); n="$n-${used[$n]}"; else used[$n]=1; fi
           if ( umask 077; qrencode -o "$STATE/qr/$n.png" "$line" ) 2>/dev/null; then cnt=$((cnt + 1)); else warn "QR для $n не создан"; fi
@@ -352,11 +361,12 @@ ops_uninstall(){
   final="$FINAL_BACKUP_DIR/vpn-setup-final-$ts.tgz"
   dest="${STATE%/}.removed-$ts"
   install -d -m 755 /run/sshd 2>/dev/null || true
-  ssh_port=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || ssh_port=""
+  ssh_port=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || true
 
   echo "Будет удалено: 3X-UI ($XUI_DIR, $XUI_ETC, $XUI_LOG, $XUI_UNIT, $XUI_CLI), cron бэкапа,"
   echo "правила UFW для портов ${PORT_REALITY:-443} ${PORT_SUDOKU:-8443} ${PORT_XHTTP:-8080}/tcp."
   echo "Перед удалением: финальный бэкап → $final; $STATE будет переименован в $dest."
+  [ -z "${DOMAIN:-}" ] || echo "Свой домен ${DOMAIN}: убирается наш сайт из nginx и порт 80; сертификат и /var/www/${DOMAIN} остаются."
   echo "SSH, правила UFW для SSH, fail2ban и sysctl НЕ трогаются."
   if [ "$dry" = 1 ]; then
     echo -e "${c_warn:-}DRY_RUN=1: ничего не изменяется, только показ действий.${c_no:-}"
@@ -410,6 +420,11 @@ ops_uninstall(){
     warn "ufw не найден — пропуск"
   fi
 
+  if [ -n "${DOMAIN:-}" ] && declare -F domain_disable >/dev/null; then
+    echo "  свой домен $DOMAIN: убираю наш сайт из nginx и порт 80 (сертификат и файлы сайта остаются)"
+    _ops_run domain_disable
+  fi
+
   step "Удаление 6/6: каталог состояния"
   if [ -d "$STATE" ]; then
     _ops_run mv -- "$STATE" "$dest"
@@ -439,14 +454,16 @@ ops_help(){
   cat <<'EOF'
 vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
-Использование:  bash install.sh [команда]
+Использование:  vpn-setup [команда]      (то же: bash /root/vpn-setup/install.sh [команда])
 
+  panel             как зайти в панель 3X-UI (SSH-туннель): готовые шаги для Windows/macOS/MobaXterm/PuTTY/телефона
   precheck [ПОРТ]   ДО установки: проверить, доходят ли данные с домашнего ПК до этого IP
                     (на ПК в это время: bash check-server.sh IP ПОРТ)
   (без команды)     установка или обновление; повторный запуск безопасен,
                     новые имена из USERS добавляются, старые ссылки не меняются
   harden-ssh        отключить вход по паролю (только после проверки входа по ключу!)
   sni [ДОМЕН]       подобрать/проверить сайт маскировки Reality (без аргумента — подбор)
+  domain ДОМЕН|off  свой домен: Reality маскируется под твой настоящий сайт на этом сервере (см. README)
   status            проверка состояния: службы, порты, firewall, fail2ban, SSH, диск, RAM,
                     бэкапы, версии; код выхода 1, если есть ✗
   links [ИМЯ]       показать ссылки (всех или одного пользователя) и пересоздать QR в /root/vpn-setup/qr/
