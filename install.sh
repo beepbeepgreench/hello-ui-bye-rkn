@@ -1788,7 +1788,9 @@ cmd_precheck(){ # проверка ДО установки: доходят ли 
   echo "или вручную:"
   echo "   curl -s -o /dev/null --max-time 20 -w \"bytes=%{size_download}\\n\" http://${ip:-IP_СЕРВЕРА}:$port/f.bin"
   echo "Ожидается bytes=300000. Ниже будут видны пришедшие запросы. Остановить раньше: Ctrl+C"
-  ( cd "$dir" && timeout 180 python3 -m http.server "$port" --bind 0.0.0.0 ) || true
+  trap ':' INT   # Ctrl+C останавливает только тестовый сервер, уборка ниже выполнится
+  ( cd "$dir" && timeout --foreground 180 python3 -m http.server "$port" --bind 0.0.0.0 ) || true
+  trap - INT
   rm -rf "$dir"
   [ "$opened" = 1 ] && { ufw delete allow "$port/tcp" >/dev/null 2>&1 || true; }
   echo "Тестовый сервер остановлен$([ "$opened" = 1 ] && echo ', порт закрыт')."
