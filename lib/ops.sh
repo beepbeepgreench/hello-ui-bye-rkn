@@ -456,6 +456,7 @@ vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
 Использование:  vpn-setup [команда]      (то же: bash /root/vpn-setup/install.sh [команда])
 
+  update            обновить скрипт с GitHub и применить (пользователи и ссылки сохраняются)
   panel             как зайти в панель 3X-UI (SSH-туннель): готовые шаги для Windows/macOS/MobaXterm/PuTTY/телефона
   precheck [ПОРТ]   ДО установки: проверить, доходят ли данные с домашнего ПК до этого IP
                     (на ПК в это время: bash check-server.sh IP ПОРТ)

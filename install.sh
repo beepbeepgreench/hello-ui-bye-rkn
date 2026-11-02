@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# vpn-setup v1.0.3 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
+# vpn-setup v1.0.4 — 3X-UI + Xray: Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc
 # Ubuntu 22.04 / 24.04 / 26.04, amd64/arm64, запуск от root, на ЧИСТОМ сервере.
 #
-#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.3/install.sh)
+#   Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.4/install.sh)
 #   Потом:       bash /root/vpn-setup/install.sh help
 #
 # Переменные (необязательно, иначе спросит): USERS, SSH_PUBKEY, SNI, PORT_REALITY, PORT_SUDOKU, PORT_XHTTP
 set -Eeuo pipefail
 
-SCRIPT_VERSION="v1.0.3"
-SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.3/install.sh"
+SCRIPT_VERSION="v1.0.4"
+SELF_URL="https://raw.githubusercontent.com/beepbeepgreench/hello-ui-bye-rkn/v1.0.4/install.sh"
 XUI_VERSION="v3.11.0"   # закреплено: проверено с Xray 26.10.21 (Reality-XHTTP, Sudoku, VLESS-enc)
 declare -A XUI_SHA256=(
   [amd64]="0ddfa4702f595442e2962acd81addc768fdacaa4ff2672c971a0463dae744916"
@@ -867,6 +867,7 @@ vpn-setup — 3X-UI + Xray (Reality-XHTTP, VLESS-enc+Sudoku, XHTTP-enc)
 
 Использование:  vpn-setup [команда]      (то же: bash /root/vpn-setup/install.sh [команда])
 
+  update            обновить скрипт с GitHub и применить (пользователи и ссылки сохраняются)
   panel             как зайти в панель 3X-UI (SSH-туннель): готовые шаги для Windows/macOS/MobaXterm/PuTTY/телефона
   precheck [ПОРТ]   ДО установки: проверить, доходят ли данные с домашнего ПК до этого IP
                     (на ПК в это время: bash check-server.sh IP ПОРТ)
@@ -2586,6 +2587,17 @@ panel_text(){ # инструкция по входу в панель через 
 PANEL
 }
 cmd_panel(){ require_installed; load_config; panel_text; }
+cmd_update(){ # скачать свежий скрипт с GitHub (main) и запустить повторную установку — данные сохраняются
+  local new="$STATE/install.sh.new" url="${SELF_URL%/*/install.sh}/main/install.sh" v
+  require_installed
+  echo "Скачиваю свежую версию: $url"
+  curl -fsSL --retry 2 --connect-timeout 15 -o "$new" "$url" || { rm -f "$new"; die "не удалось скачать скрипт с GitHub — проверь интернет на сервере и повтори"; }
+  bash -n "$new" && grep -q '^SCRIPT_VERSION="v' "$new" || { rm -f "$new"; die "скачанный файл повреждён или это не vpn-setup — ничего не изменено"; }
+  v=$(sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p' "$new" | head -n 1) || true
+  mv "$new" "$STATE/install.sh"; chmod 700 "$STATE/install.sh"
+  echo "Было: ${SCRIPT_VERSION}, стало: ${v:-?}. Запускаю обновление (пользователи и ссылки сохраняются)…"
+  VPN_SETUP_REEXEC=1 exec bash "$STATE/install.sh" install
+}
 
 cmd_precheck(){ # проверка ДО установки: доходят ли данные с домашнего ПК до этого IP
   [ "$(id -u)" = 0 ] || die "нужен root"
@@ -2881,6 +2893,7 @@ case "${1:-install}" in
   domain)       [ "$(id -u)" = 0 ] || die "нужен root"; cmd_domain "${2:-}" ;;
   precheck)     cmd_precheck "${2:-}" ;;
   panel|tunnel) cmd_panel ;;
+  update)       cmd_update ;;
   status)       require_installed; load_config; ops_status || exit 1 ;;
   links)        require_installed; load_config; ops_links "${2:-}" ;;
   backup)       require_installed; load_config; ops_backup "${2:-}" ;;

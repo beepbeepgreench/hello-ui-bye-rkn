@@ -224,6 +224,17 @@ panel_text(){ # инструкция по входу в панель через 
 PANEL
 }
 cmd_panel(){ require_installed; load_config; panel_text; }
+cmd_update(){ # скачать свежий скрипт с GitHub (main) и запустить повторную установку — данные сохраняются
+  local new="$STATE/install.sh.new" url="${SELF_URL%/*/install.sh}/main/install.sh" v
+  require_installed
+  echo "Скачиваю свежую версию: $url"
+  curl -fsSL --retry 2 --connect-timeout 15 -o "$new" "$url" || { rm -f "$new"; die "не удалось скачать скрипт с GitHub — проверь интернет на сервере и повтори"; }
+  bash -n "$new" && grep -q '^SCRIPT_VERSION="v' "$new" || { rm -f "$new"; die "скачанный файл повреждён или это не vpn-setup — ничего не изменено"; }
+  v=$(sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p' "$new" | head -n 1) || true
+  mv "$new" "$STATE/install.sh"; chmod 700 "$STATE/install.sh"
+  echo "Было: ${SCRIPT_VERSION}, стало: ${v:-?}. Запускаю обновление (пользователи и ссылки сохраняются)…"
+  VPN_SETUP_REEXEC=1 exec bash "$STATE/install.sh" install
+}
 
 cmd_precheck(){ # проверка ДО установки: доходят ли данные с домашнего ПК до этого IP
   [ "$(id -u)" = 0 ] || die "нужен root"
@@ -519,6 +530,7 @@ case "${1:-install}" in
   domain)       [ "$(id -u)" = 0 ] || die "нужен root"; cmd_domain "${2:-}" ;;
   precheck)     cmd_precheck "${2:-}" ;;
   panel|tunnel) cmd_panel ;;
+  update)       cmd_update ;;
   status)       require_installed; load_config; ops_status || exit 1 ;;
   links)        require_installed; load_config; ops_links "${2:-}" ;;
   backup)       require_installed; load_config; ops_backup "${2:-}" ;;
