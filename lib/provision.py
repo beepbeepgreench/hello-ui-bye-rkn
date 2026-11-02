@@ -96,11 +96,37 @@ def write_links(users=None):
     print(f"ссылки: {STATE / 'links.txt'}")
 
 
+def list_inbounds():
+    """Список inbound'ов. Сразу после перезапуска панель может отдать пустой список, пока не дочитала базу
+    (видели на 3.11 после обновления) — при повторной установке ждём, пока inbound'ы появятся."""
+    lst = api("GET", "/panel/api/inbounds/list") or []
+    if not lst and (STATE / "links.txt").exists():
+        for _ in range(20):
+            time.sleep(1)
+            try:
+                lst = api("GET", "/panel/api/inbounds/list", quiet=True) or []
+            except SystemExit:
+                continue
+            if lst:
+                break
+    return lst
+
+
+def find_ours(lst, tag, port):
+    """Наш inbound: по тегу, иначе vless-inbound на нашем порту (если тег переписан панелью)."""
+    ib = next((i for i in lst if i.get("tag") == tag), None)
+    if ib is None:
+        ib = next((i for i in lst if int(i.get("port") or 0) == int(port) and i.get("protocol") == "vless"), None)
+        if ib is not None:
+            print(f"inbound {tag}: найден по порту {port} (тег {ib.get('tag')!r})")
+    return ib
+
+
 def set_sni(dom):
     """SET_SNI mode: point vpn-reality at another camouflage site; idempotent, with rollback."""
     if not re.fullmatch(r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}", dom):
         die(f"SET_SNI: некорректное доменное имя {dom!r}")
-    ib = next((i for i in (api("GET", "/panel/api/inbounds/list") or []) if i.get("tag") == "vpn-reality"), None)
+    ib = find_ours(list_inbounds(), "vpn-reality", int(E.get("PORT_REALITY") or 443))
     if not ib:
         die("inbound vpn-reality не найден — сначала выполните полную установку")
     iid = ib["id"]
@@ -207,11 +233,11 @@ if st.get("subEnable") or st.get("subListen") != "127.0.0.1":
             continue
     print("подписка: выключена (только localhost)")
 
-existing = {ib["tag"]: ib for ib in (api("GET", "/panel/api/inbounds/list") or [])}
+_all = list_inbounds()
 ids, new_ids = [], []
 for d in INBOUNDS:
-    if d["tag"] in existing:
-        ib = existing[d["tag"]]
+    ib = find_ours(_all, d["tag"], d["port"])
+    if ib is not None:
         ids.append(ib["id"])
         set_remark(ib["id"], d["remark"])
         if not ib.get("enable", True):
