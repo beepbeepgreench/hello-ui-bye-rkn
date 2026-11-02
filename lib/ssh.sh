@@ -30,6 +30,17 @@ _ssh_session_port(){ # серверный порт текущей SSH-сесси
   return 0
 }
 
+_ssh_is_loopback(){ # 127.x, ::1, [::1], [::ffff:127.x]
+  local a=${1#[}; a=${a%]}; a=${a#::ffff:}
+  [[ "$a" == 127.* || "$a" == "::1" || "$a" == "localhost" ]]
+}
+_ssh_is_ephemeral(){ # порт из диапазона исходящих соединений ядра (обычно 32768–60999)
+  local lo=32768 hi=60999 r=""
+  r=$(cat /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null || true)
+  if [[ "$r" =~ ^([0-9]+)[[:space:]]+([0-9]+)$ ]]; then lo=${BASH_REMATCH[1]}; hi=${BASH_REMATCH[2]}; fi
+  _ssh_valid_port "${1:-}" && [ $((10#$1)) -ge "$lo" ] && [ $((10#$1)) -le "$hi" ]
+}
+
 _ssh_socket_ports(){ # порты из ssh.socket (ListenStream), если сокет активен/включён (Ubuntu 24.04+)
   local out="" tok
   if ! systemctl is-active --quiet ssh.socket 2>/dev/null && ! systemctl is-enabled --quiet ssh.socket 2>/dev/null; then
@@ -65,6 +76,8 @@ _ssh_ports_found(){ # все найденные порты SSH по одному
       addr=$(awk '{print $4}' <<<"$line" || true)
       port=${addr##*:}
       _ssh_valid_port "$port" || continue
+      # loopback — это не вход SSH, а X11-forwarding MobaXterm (127.0.0.1:6010) или -R туннели
+      _ssh_is_loopback "${addr%:*}" && continue
       if [[ "$line" == *'(("sshd'* || "$line" == *',("sshd'* ]]; then
         echo $((10#$port))
       elif [[ "$line" == *'"systemd"'* ]] && grep -qx -- "$((10#$port))" <<<"$sock_ports"; then
@@ -77,6 +90,9 @@ _ssh_ports_found(){ # все найденные порты SSH по одному
       [[ "$line" == *'"sshd'* ]] || continue
       addr=$(awk '{for(i=1;i<=NF;i++) if($i ~ /^users:/){print $(i-2); exit}}' <<<"$line" || true)
       port=${addr##*:}
+      # sshd как клиент проброса (туннель в панель): локальный адрес loopback или эфемерный порт — не вход SSH
+      _ssh_is_loopback "${addr%:*}" && continue
+      _ssh_is_ephemeral "$port" && continue
       if _ssh_valid_port "$port"; then echo $((10#$port)); fi
     done <<<"$out"
     # (d) sshd -T (без /run/sshd падает с "Missing privilege separation directory")
@@ -153,6 +169,14 @@ firewall_apply(){ # firewall_apply PORT... — идемпотентно: SSH + �
   done
   for p in "$@"; do
     ufw allow "$((10#$p))/tcp" comment 'vpn-setup' >/dev/null || die "ufw allow ${p}/tcp не прошёл"
+  done
+  # лишние правила 'ssh' от прошлых запусков (порт X11/туннеля MobaXterm) — убрать; текущие SSH-порты не трогаются
+  local st="" r
+  st=$(ufw status 2>/dev/null || true)
+  for r in $(awk '/# ssh$/ && $1 ~ /^[0-9]+\/tcp$/ {sub("/tcp","",$1); print $1}' <<<"$st" | sort -u); do
+    if [[ " $ssh_ports " != *" $r "* ]]; then
+      ufw delete allow "${r}/tcp" >/dev/null 2>&1 && echo "убрано лишнее правило firewall: ${r}/tcp (не SSH-вход)" || true
+    fi
   done
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
